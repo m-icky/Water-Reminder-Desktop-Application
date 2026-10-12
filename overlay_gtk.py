@@ -306,7 +306,42 @@ class WaterReminderOverlay(Gtk.Window):
             self.image_widget.set_from_pixbuf(self.frames[0])
         main_box.pack_start(self.image_widget, False, False, 0)
         
+        self.apply_pointer_cursors(main_box)
         self.add(main_box)
+
+    def make_pointer(self, widget):
+        widget.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        
+        def on_enter(w, event):
+            if event.detail == Gdk.NotifyType.INFERIOR:
+                return False
+            win = w.get_window()
+            if win:
+                display = win.get_display()
+                cursor = Gdk.Cursor.new_from_name(display, "pointer")
+                if not cursor:
+                    cursor = Gdk.Cursor.new_for_display(display, Gdk.CursorType.HAND2)
+                win.set_cursor(cursor)
+            return False
+            
+        def on_leave(w, event):
+            if event.detail == Gdk.NotifyType.INFERIOR:
+                return False
+            win = w.get_window()
+            if win:
+                win.set_cursor(None)
+            return False
+            
+        widget.connect("enter-notify-event", on_enter)
+        widget.connect("leave-notify-event", on_leave)
+        return widget
+
+    def apply_pointer_cursors(self, widget):
+        if isinstance(widget, Gtk.Button):
+            self.make_pointer(widget)
+        if isinstance(widget, Gtk.Container):
+            for child in widget.get_children():
+                self.apply_pointer_cursors(child)
 
     def create_prompt_view(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)

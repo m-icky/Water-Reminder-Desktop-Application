@@ -30,6 +30,7 @@ try:
     )
     WA_TRANSLUCENT = Qt.WidgetAttribute.WA_TranslucentBackground
     ANTIALIASING = QPainter.RenderHint.Antialiasing
+    CURSOR_POINTER = Qt.CursorShape.PointingHandCursor
 
 except ImportError:
     try:
@@ -54,6 +55,7 @@ except ImportError:
         )
         WA_TRANSLUCENT = Qt.WidgetAttribute.WA_TranslucentBackground
         ANTIALIASING = QPainter.RenderHint.Antialiasing
+        CURSOR_POINTER = Qt.CursorShape.PointingHandCursor
 
     except ImportError:
         try:
@@ -78,6 +80,7 @@ except ImportError:
             )
             WA_TRANSLUCENT = Qt.WA_TranslucentBackground
             ANTIALIASING = QPainter.Antialiasing
+            CURSOR_POINTER = Qt.PointingHandCursor
 
         except ImportError:
             QT_AVAILABLE = False
@@ -243,6 +246,10 @@ if QT_AVAILABLE:
 
             main_layout.addLayout(bubble_container)
             main_layout.addWidget(self.char_label)
+
+            # Set pointer cursor for all buttons and action buttons
+            for btn in self.findChildren(QPushButton):
+                btn.setCursor(CURSOR_POINTER)
 
         def create_prompt_view(self):
             w = QWidget()
