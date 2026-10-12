@@ -11,6 +11,7 @@ AUDIO_FILE = os.path.join(BASE_DIR, "reminder.wav")
 AUDIO_OGG = os.path.join(BASE_DIR, "reminder.ogg")
 PID_FILE = os.path.join(BASE_DIR, "reminder.pid")
 SOCKET_FILE = os.path.join(BASE_DIR, "reminder.sock")
+PORT_FILE = os.path.join(BASE_DIR, "reminder.port")
 
 DEFAULT_CONFIG = {
     "interval_minutes": 60,

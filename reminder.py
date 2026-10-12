@@ -12,34 +12,106 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from config import (
-    PID_FILE, SOCKET_FILE, load_config, save_config, reset_glasses_count, get_today_str
+    PID_FILE, SOCKET_FILE, PORT_FILE, load_config, save_config, reset_glasses_count, get_today_str
 )
 
+IS_WINDOWS = sys.platform == "win32"
+IS_LINUX = sys.platform.startswith("linux")
+
+# Linux autostart paths
 AUTOSTART_DIR = os.path.expanduser("~/.config/autostart")
 AUTOSTART_DESKTOP_FILE = os.path.join(AUTOSTART_DIR, "water-reminder.desktop")
 SYSTEMD_USER_DIR = os.path.expanduser("~/.config/systemd/user")
 SYSTEMD_SERVICE_FILE = os.path.join(SYSTEMD_USER_DIR, "water-reminder.service")
 
+# Windows autostart path
+def get_windows_startup_vbs():
+    appdata = os.environ.get("APPDATA", "")
+    if not appdata:
+        appdata = os.path.expanduser("~\\AppData\\Roaming")
+    startup_dir = os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+    return os.path.join(startup_dir, "WaterReminder.vbs")
+
 def send_socket_command(cmd, timeout=3.0):
-    if not os.path.exists(SOCKET_FILE):
-        return None
-    try:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(timeout)
-        s.connect(SOCKET_FILE)
-        s.sendall(cmd.encode("utf-8"))
-        data = s.recv(4096).decode("utf-8")
-        s.close()
-        return json.loads(data)
-    except Exception:
-        return None
+    # 1. Try Localhost TCP socket first (preferred cross-platform)
+    if os.path.exists(PORT_FILE):
+        try:
+            with open(PORT_FILE, "r") as f:
+                port = int(f.read().strip())
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect(("127.0.0.1", port))
+            s.sendall(cmd.encode("utf-8"))
+            data = s.recv(4096).decode("utf-8")
+            s.close()
+            return json.loads(data)
+        except Exception:
+            pass
+
+    # 2. Try Unix domain socket (POSIX fallback)
+    if hasattr(socket, "AF_UNIX") and os.path.exists(SOCKET_FILE):
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect(SOCKET_FILE)
+            s.sendall(cmd.encode("utf-8"))
+            data = s.recv(4096).decode("utf-8")
+            s.close()
+            return json.loads(data)
+        except Exception:
+            pass
+
+    return None
 
 def is_process_running(pid):
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
+    if pid <= 0:
         return False
+    if IS_WINDOWS:
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            SYNCHRONIZE = 0x00100000
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)
+            if handle:
+                exit_code = ctypes.c_ulong()
+                kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+                kernel32.CloseHandle(handle)
+                return exit_code.value == 259  # STILL_ACTIVE
+            return False
+        except Exception:
+            try:
+                os.kill(pid, 0)
+                return True
+            except OSError:
+                return False
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+def kill_process(pid):
+    if IS_WINDOWS:
+        try:
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except Exception:
+                pass
+    else:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            time.sleep(0.3)
+        except OSError:
+            pass
+        if is_process_running(pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
 
 def get_running_pid():
     if os.path.exists(PID_FILE):
@@ -57,16 +129,20 @@ def cmd_status():
     sock_resp = send_socket_command("status")
     
     cfg = load_config()
-    print("=" * 48)
+    print("=" * 50)
     print("           💧 WATER REMINDER STATUS           ")
-    print("=" * 48)
+    print("=" * 50)
     
     today_str = cfg.get("today_date", get_today_str())
+    os_name = "Windows" if IS_WINDOWS else ("Ubuntu/Linux" if IS_LINUX else sys.platform)
+    print(f"  ● Platform:       {os_name}")
+    
     if pid and sock_resp:
         rem_mins = sock_resp.get("next_reminder_in_minutes", 0)
         rem_secs = sock_resp.get("next_reminder_in_seconds", 0)
         locked = sock_resp.get("is_screen_locked", False)
-        print(f"  ● Status:         RUNNING (PID: {pid})")
+        engine = sock_resp.get("engine", "default").upper()
+        print(f"  ● Status:         RUNNING (PID: {pid}, Engine: {engine})")
         print(f"  ● Today's Date:   {today_str} (Resets daily at 00:00)")
         print(f"  ● Glasses Today:  {sock_resp.get('glasses_today', 0)} 🥛")
         print(f"  ● Interval:       Every {sock_resp.get('interval_minutes')} minutes")
@@ -90,9 +166,12 @@ def cmd_status():
         history_str = " | ".join([f"{d}: {c}🥛" for d, c in recent])
         print(f"  ● Past Days:      {history_str}")
         
-    autostart_active = os.path.exists(AUTOSTART_DESKTOP_FILE) or os.path.exists(SYSTEMD_SERVICE_FILE)
-    print(f"  ● Auto-start:     {'Enabled (Starts on login) ✅' if autostart_active else 'Disabled ❌'}")
-    print("=" * 48)
+    if IS_WINDOWS:
+        autostart_active = os.path.exists(get_windows_startup_vbs())
+    else:
+        autostart_active = os.path.exists(AUTOSTART_DESKTOP_FILE) or os.path.exists(SYSTEMD_SERVICE_FILE)
+    print(f"  ● Auto-start:     {'Enabled (Starts on boot/login) ✅' if autostart_active else 'Disabled ❌'}")
+    print("=" * 50)
 
 def cmd_start():
     pid = get_running_pid()
@@ -102,16 +181,32 @@ def cmd_start():
         
     print("🚀 Starting Water Reminder daemon...")
     log_file = os.path.join(BASE_DIR, "reminder.log")
+    
     with open(log_file, "a") as log:
-        proc = subprocess.Popen(
-            [sys.executable, os.path.join(BASE_DIR, "reminder.py"), "daemon"],
-            stdout=log,
-            stderr=log,
-            preexec_fn=os.setpgrp,
-            close_fds=True
-        )
+        if IS_WINDOWS:
+            # Use pythonw.exe if available so no command prompt window stays open
+            py_dir = os.path.dirname(sys.executable)
+            pythonw = os.path.join(py_dir, "pythonw.exe")
+            py_exe = pythonw if os.path.exists(pythonw) else sys.executable
+            DETACHED_PROCESS = 0x00000008
+            CREATE_NEW_PROCESS_GROUP = 0x00000200
+            proc = subprocess.Popen(
+                [py_exe, os.path.join(BASE_DIR, "reminder.py"), "daemon"],
+                stdout=log,
+                stderr=log,
+                creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+                close_fds=True
+            )
+        else:
+            proc = subprocess.Popen(
+                [sys.executable, os.path.join(BASE_DIR, "reminder.py"), "daemon"],
+                stdout=log,
+                stderr=log,
+                preexec_fn=os.setpgrp,
+                close_fds=True
+            )
         
-    # Wait up to 2 seconds for PID file & socket
+    # Wait up to 2 seconds for PID file & socket initialization
     for _ in range(20):
         time.sleep(0.1)
         if get_running_pid():
@@ -121,8 +216,8 @@ def cmd_start():
     if running_pid:
         print(f"✅ Water Reminder daemon successfully started! (PID: {running_pid})")
         print("   The reminder character will appear every hour on the bottom-right.")
-        print(f"   Use '{sys.argv[0]} test' to see character immediately.")
-        print(f"   Use '{sys.argv[0]} stop' to stop it anytime.")
+        print(f"   Use 'python reminder.py test' to see character immediately.")
+        print(f"   Use 'python reminder.py stop' to stop it anytime.")
     else:
         print("❌ Failed to start daemon. Check reminder.log for details.")
 
@@ -130,41 +225,31 @@ def cmd_stop():
     pid = get_running_pid()
     if not pid:
         print("○ Water Reminder is not currently running.")
-        # Clean up stale files
-        if os.path.exists(PID_FILE): os.unlink(PID_FILE)
-        if os.path.exists(SOCKET_FILE): os.unlink(SOCKET_FILE)
+        for fpath in (PID_FILE, SOCKET_FILE, PORT_FILE):
+            if os.path.exists(fpath):
+                try: os.unlink(fpath)
+                except OSError: pass
         return
         
     print(f"🛑 Stopping Water Reminder daemon (PID: {pid})...")
-    # Try socket stop first
+    # 1. Try socket stop first
     send_socket_command("stop", timeout=1.0)
     
-    # Wait or send SIGTERM
+    # 2. Wait up to 1.5 seconds for graceful shutdown
     for _ in range(15):
         time.sleep(0.1)
         if not is_process_running(pid):
             break
             
+    # 3. Force kill if still lingering
     if is_process_running(pid):
-        try:
-            os.kill(pid, signal.SIGTERM)
-            time.sleep(0.3)
-        except OSError:
-            pass
-            
-    if is_process_running(pid):
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
+        kill_process(pid)
             
     # Clean files
-    if os.path.exists(PID_FILE):
-        try: os.unlink(PID_FILE)
-        except OSError: pass
-    if os.path.exists(SOCKET_FILE):
-        try: os.unlink(SOCKET_FILE)
-        except OSError: pass
+    for fpath in (PID_FILE, SOCKET_FILE, PORT_FILE):
+        if os.path.exists(fpath):
+            try: os.unlink(fpath)
+            except OSError: pass
         
     print("✅ Water Reminder daemon completely stopped.")
 
@@ -184,15 +269,19 @@ def cmd_test():
             
     # If not running in daemon, run overlay directly
     print("🎬 Launching reminder overlay directly...")
-    import gi
-    gi.require_version("Gtk", "3.0")
-    from gi.repository import Gtk
-    from overlay import WaterReminderOverlay
-    
-    overlay = WaterReminderOverlay()
-    overlay.show_overlay()
-    print("✅ Character reminder is now active on your screen!")
-    Gtk.main()
+    from overlay import WaterReminderOverlay, ENGINE
+    if ENGINE == "gtk":
+        import gi
+        gi.require_version("Gtk", "3.0")
+        from gi.repository import Gtk
+        overlay = WaterReminderOverlay()
+        overlay.show_overlay()
+        print("✅ Character reminder is now active on your screen!")
+        Gtk.main()
+    elif ENGINE == "qt":
+        from overlay_qt import run_standalone
+        print("✅ Character reminder is now active on your screen!")
+        run_standalone()
 
 def cmd_interval(mins):
     try:
@@ -208,17 +297,40 @@ def cmd_interval(mins):
     cfg["interval_minutes"] = mins
     save_config(cfg)
     
-    # Update running daemon if active
     resp = send_socket_command(f"set_interval {mins}")
     print(f"✅ Reminder interval set to every {mins} minutes.")
 
 def cmd_autostart(action):
-    script_sh = os.path.join(BASE_DIR, "reminder.sh")
-    
-    if action == "enable":
-        # 1. Desktop Autostart entry
-        os.makedirs(AUTOSTART_DIR, exist_ok=True)
-        desktop_content = f"""[Desktop Entry]
+    if IS_WINDOWS:
+        vbs_file = get_windows_startup_vbs()
+        if action == "enable":
+            os.makedirs(os.path.dirname(vbs_file), exist_ok=True)
+            script_path = os.path.join(BASE_DIR, "reminder.py").replace("\\", "\\\\")
+            py_dir = os.path.dirname(sys.executable)
+            pythonw = os.path.join(py_dir, "pythonw.exe")
+            py_exe = "pythonw.exe" if os.path.exists(pythonw) else "python.exe"
+            
+            vbs_content = f'''Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run "{py_exe} \"\"\"{script_path}\"\"\" daemon", 0, False
+'''
+            with open(vbs_file, "w") as f:
+                f.write(vbs_content)
+            print("✅ Windows Auto-start ENABLED!")
+            print(f"   • Created Startup launcher: {vbs_file}")
+            print("   The script will start silently in background when you log into Windows!")
+        elif action == "disable":
+            if os.path.exists(vbs_file):
+                os.unlink(vbs_file)
+            print("✅ Windows Auto-start DISABLED.")
+        else:
+            print("Usage: autostart [enable|disable]")
+    else:
+        # Linux autostart
+        script_sh = os.path.join(BASE_DIR, "reminder.sh")
+        if action == "enable":
+            # 1. Desktop Autostart entry
+            os.makedirs(AUTOSTART_DIR, exist_ok=True)
+            desktop_content = f"""[Desktop Entry]
 Type=Application
 Name=Water Reminder
 Comment=Character overlay reminder to drink water
@@ -230,13 +342,13 @@ StartupNotify=false
 Terminal=false
 Categories=Utility;
 """
-        with open(AUTOSTART_DESKTOP_FILE, "w") as f:
-            f.write(desktop_content)
-        os.chmod(AUTOSTART_DESKTOP_FILE, 0o755)
-        
-        # 2. Systemd user service
-        os.makedirs(SYSTEMD_USER_DIR, exist_ok=True)
-        service_content = f"""[Unit]
+            with open(AUTOSTART_DESKTOP_FILE, "w") as f:
+                f.write(desktop_content)
+            os.chmod(AUTOSTART_DESKTOP_FILE, 0o755)
+            
+            # 2. Systemd user service
+            os.makedirs(SYSTEMD_USER_DIR, exist_ok=True)
+            service_content = f"""[Unit]
 Description=Water Reminder Desktop Application
 After=graphical-session.target
 PartOf=graphical-session.target
@@ -253,43 +365,43 @@ Environment=GDK_BACKEND=x11
 [Install]
 WantedBy=graphical-session.target
 """
-        with open(SYSTEMD_SERVICE_FILE, "w") as f:
-            f.write(service_content)
-            
-        # Try enabling systemd service
-        try:
-            subprocess.run(["systemctl", "--user", "daemon-reload"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(["systemctl", "--user", "enable", "water-reminder.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
-            
-        print("✅ Auto-start ENABLED!")
-        print(f"   • Created XDG Autostart: {AUTOSTART_DESKTOP_FILE}")
-        print(f"   • Created Systemd User Service: {SYSTEMD_SERVICE_FILE}")
-        print("   The script will now start automatically when you power on or log in!")
-        
-    elif action == "disable":
-        if os.path.exists(AUTOSTART_DESKTOP_FILE):
-            os.unlink(AUTOSTART_DESKTOP_FILE)
-        if os.path.exists(SYSTEMD_SERVICE_FILE):
-            try:
-                subprocess.run(["systemctl", "--user", "disable", "water-reminder.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
-            os.unlink(SYSTEMD_SERVICE_FILE)
+            with open(SYSTEMD_SERVICE_FILE, "w") as f:
+                f.write(service_content)
+                
             try:
                 subprocess.run(["systemctl", "--user", "daemon-reload"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["systemctl", "--user", "enable", "water-reminder.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception:
                 pass
-        print("✅ Auto-start DISABLED.")
-    else:
-        print("Usage: autostart [enable|disable]")
+                
+            print("✅ Ubuntu/Linux Auto-start ENABLED!")
+            print(f"   • Created XDG Autostart: {AUTOSTART_DESKTOP_FILE}")
+            print(f"   • Created Systemd User Service: {SYSTEMD_SERVICE_FILE}")
+            print("   The script will now start automatically when you power on or log in!")
+            
+        elif action == "disable":
+            if os.path.exists(AUTOSTART_DESKTOP_FILE):
+                os.unlink(AUTOSTART_DESKTOP_FILE)
+            if os.path.exists(SYSTEMD_SERVICE_FILE):
+                try:
+                    subprocess.run(["systemctl", "--user", "disable", "water-reminder.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+                os.unlink(SYSTEMD_SERVICE_FILE)
+                try:
+                    subprocess.run(["systemctl", "--user", "daemon-reload"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+            print("✅ Ubuntu/Linux Auto-start DISABLED.")
+        else:
+            print("Usage: autostart [enable|disable]")
 
 def print_help():
-    print("""💧 WATER REMINDER CLI 💧
+    launcher = "reminder.bat" if IS_WINDOWS else "./reminder.sh"
+    print(f"""💧 WATER REMINDER CLI (Cross-Platform) 💧
 
-Usage: python3 reminder.py <command> [options]
-   or: ./reminder.sh <command> [options]
+Usage: python reminder.py <command> [options]
+   or: {launcher} <command> [options]
 
 Commands:
   start                Start the reminder daemon in background
@@ -299,7 +411,7 @@ Commands:
   test                 Immediately show the character reminder on screen
   interval <minutes>   Set reminder interval (e.g. 60 for 1 hour, 30 for 30 min)
   reset-count          Reset today's water glasses count back to 0
-  autostart enable     Automatically start when you power on/log into Ubuntu
+  autostart enable     Automatically start when you power on/log in
   autostart disable    Remove automatic startup
   help                 Show this help message
 """)
@@ -334,7 +446,7 @@ def main():
         if len(sys.argv) > 2:
             cmd_interval(sys.argv[2])
         else:
-            print("Please specify minutes: e.g. python3 reminder.py interval 60")
+            print("Please specify minutes: e.g. python reminder.py interval 60")
     elif cmd == "autostart":
         action = sys.argv[2].lower() if len(sys.argv) > 2 else "enable"
         cmd_autostart(action)

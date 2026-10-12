@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+reminder.pid
+reminder.sock
+reminder.port
+reminder.log
+.DS_Store

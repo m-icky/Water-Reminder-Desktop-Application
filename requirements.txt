@@ -1,0 +1,5 @@
+# Cross-Platform Water Reminder Dependencies
+# On Ubuntu/Debian Linux: GTK3 is pre-installed (sudo apt install python3-gi gir1.2-gtk-3.0)
+# On Windows and macOS: Install PyQt6
+PyQt6>=6.4.0; sys_platform == "win32" or sys_platform == "darwin"
+Pillow>=9.0.0

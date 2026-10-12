@@ -5,28 +5,27 @@ import signal
 import socket
 import json
 
-# Ensure X11 backend for reliable positioning & overlay
-os.environ.setdefault("GDK_BACKEND", "x11")
-
-import gi
-gi.require_version("Gtk", "3.0")
-gi.require_version("Gio", "2.0")
-from gi.repository import Gtk, GLib, Gio
+# Ensure X11 backend for reliable positioning & overlay on Linux
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("GDK_BACKEND", "x11")
 
 from config import (
-    load_config, save_config, reset_glasses_count, PID_FILE, SOCKET_FILE
+    load_config, save_config, reset_glasses_count, PID_FILE, SOCKET_FILE, PORT_FILE
 )
-from overlay import WaterReminderOverlay
+from overlay import WaterReminderOverlay, ENGINE
 
 class ReminderDaemon:
     def __init__(self, test_on_start=False):
         self.test_on_start = test_on_start
         self.config = load_config()
-        self.overlay = WaterReminderOverlay(on_action_callback=self.on_overlay_action)
+        self.engine = ENGINE
         self.running = True
+
+        # Initialize overlay
+        self.overlay = WaterReminderOverlay(on_action_callback=self.on_overlay_action)
         
-        # Setup IPC server socket
-        self.setup_socket()
+        # Setup IPC sockets (TCP on 127.0.0.1 for cross-platform + Unix domain socket on POSIX)
+        self.setup_sockets()
         
         # Setup signals
         signal.signal(signal.SIGINT, self.handle_signal)
@@ -36,79 +35,121 @@ class ReminderDaemon:
         now = int(time.time())
         interval_secs = self.config.get("interval_minutes", 60) * 60
         
-        # Check if next_reminder_time is already set in future
         next_time = self.config.get("next_reminder_time", 0)
         last_drank = self.config.get("last_drank_time", 0)
         last_remind = self.config.get("last_reminder_time", 0)
         
         if self.test_on_start:
-            # Trigger immediately on test
             self.config["next_reminder_time"] = now
         elif next_time > now:
-            # Keep existing scheduled future time
             pass
         else:
             # If system just turned on and it has been more than 30 mins since last drink/reminder
             ref_time = max(last_drank, last_remind)
             if ref_time > 0 and (now - ref_time) >= (30 * 60):
-                # Trigger after 10 seconds of desktop startup
                 self.config["next_reminder_time"] = now + 10
             else:
                 self.config["next_reminder_time"] = now + interval_secs
                 
         save_config(self.config)
-        
-        # Setup periodic check timer (every 5 seconds)
-        GLib.timeout_add_seconds(5, self.check_reminder_schedule)
-        
-        # Setup periodic socket polling (every 200 ms)
-        GLib.timeout_add(200, self.poll_socket_clients)
-        
-        # If test_on_start requested
-        if self.test_on_start:
-            GLib.timeout_add(500, self.trigger_reminder)
+
+        # Setup platform timers
+        self.setup_timers()
+
+    def setup_sockets(self):
+        # 1. Cross-platform Localhost TCP socket (works on Windows, Linux, macOS)
+        self.server_tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_tcp.setblocking(False)
+        self.server_tcp.bind(("127.0.0.1", 0))
+        self.server_tcp.listen(5)
+        self.port = self.server_tcp.getsockname()[1]
+        try:
+            with open(PORT_FILE, "w") as f:
+                f.write(str(self.port))
+        except Exception as e:
+            print(f"[Warning] Failed to write port file: {e}")
+
+        # 2. Unix domain socket on POSIX for backwards compatibility
+        self.server_unix = None
+        if hasattr(socket, "AF_UNIX") and sys.platform != "win32":
+            if os.path.exists(SOCKET_FILE):
+                try:
+                    os.unlink(SOCKET_FILE)
+                except OSError:
+                    pass
+            try:
+                self.server_unix = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                self.server_unix.setblocking(False)
+                self.server_unix.bind(SOCKET_FILE)
+                self.server_unix.listen(5)
+            except Exception as e:
+                print(f"[Warning] Failed to bind Unix socket: {e}")
+                self.server_unix = None
+
+    def setup_timers(self):
+        if self.engine == "gtk":
+            from gi.repository import GLib
+            GLib.timeout_add_seconds(5, self.check_reminder_schedule)
+            GLib.timeout_add(200, self.poll_socket_clients)
+            if self.test_on_start:
+                GLib.timeout_add(500, self.trigger_reminder)
+        elif self.engine == "qt":
+            # Qt timers
+            from overlay_qt import QTimer
+            self.sched_timer = QTimer()
+            self.sched_timer.timeout.connect(self.check_reminder_schedule)
+            self.sched_timer.start(5000)
+
+            self.sock_timer = QTimer()
+            self.sock_timer.timeout.connect(self.poll_socket_clients)
+            self.sock_timer.start(200)
+
+            if self.test_on_start:
+                QTimer.singleShot(500, self.trigger_reminder)
 
     def is_screen_locked(self):
-        """Query DBus to check if GNOME / freedesktop screensaver is active."""
-        try:
-            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-            proxy = Gio.DBusProxy.new_sync(
-                bus,
-                Gio.DBusProxyFlags.NONE,
-                None,
-                "org.gnome.ScreenSaver",
-                "/org/gnome/ScreenSaver",
-                "org.gnome.ScreenSaver",
-                None
-            )
-            res = proxy.call_sync("GetActive", None, Gio.DBusCallFlags.NONE, 200, None)
-            return bool(res.unpack()[0])
-        except Exception:
-            return False
-
-    def setup_socket(self):
-        if os.path.exists(SOCKET_FILE):
+        if sys.platform == "win32":
             try:
-                os.unlink(SOCKET_FILE)
-            except OSError:
-                pass
-        self.server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.server_sock.setblocking(False)
-        self.server_sock.bind(SOCKET_FILE)
-        self.server_sock.listen(5)
+                import ctypes
+                user32 = ctypes.windll.user32
+                # DESKTOP_SWITCHDESKTOP = 0x0100
+                desk = user32.OpenInputDesktop(0, False, 0x0100)
+                if desk == 0:
+                    return True
+                user32.CloseDesktop(desk)
+                return False
+            except Exception:
+                return False
+        else:
+            try:
+                import gi
+                gi.require_version("Gio", "2.0")
+                from gi.repository import Gio
+                bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+                proxy = Gio.DBusProxy.new_sync(
+                    bus,
+                    Gio.DBusProxyFlags.NONE,
+                    None,
+                    "org.gnome.ScreenSaver",
+                    "/org/gnome/ScreenSaver",
+                    "org.gnome.ScreenSaver",
+                    None
+                )
+                res = proxy.call_sync("GetActive", None, Gio.DBusCallFlags.NONE, 200, None)
+                return bool(res.unpack()[0])
+            except Exception:
+                return False
 
-    def poll_socket_clients(self):
-        if not self.running:
-            return False
-            
+    def handle_client(self, conn):
         try:
-            conn, _ = self.server_sock.accept()
             conn.setblocking(True)
             data = conn.recv(4096).decode("utf-8").strip()
-            
             response = {"status": "ok"}
-            if data == "test" or data == "trigger":
-                GLib.idle_add(self.trigger_reminder)
+            should_stop = False
+
+            if data in ("test", "trigger"):
+                self.schedule_ui_callback(self.trigger_reminder)
                 response["message"] = "Reminder triggered"
             elif data == "status":
                 cfg = load_config()
@@ -118,6 +159,7 @@ class ReminderDaemon:
                 response = {
                     "status": "running",
                     "pid": os.getpid(),
+                    "engine": self.engine,
                     "interval_minutes": cfg.get("interval_minutes", 60),
                     "sound_enabled": cfg.get("sound_enabled", True),
                     "glasses_today": cfg.get("glasses_today", 0),
@@ -135,25 +177,53 @@ class ReminderDaemon:
                     response["message"] = f"Interval updated to {mins} mins"
                 except Exception as e:
                     response = {"status": "error", "message": str(e)}
-            elif data == "reset_count":
+            elif data in ("reset_count", "reset"):
                 reset_glasses_count()
                 response["message"] = "Daily water count reset to 0"
             elif data == "stop":
                 response["message"] = "Daemon stopping"
-                conn.sendall(json.dumps(response).encode("utf-8"))
-                conn.close()
-                GLib.idle_add(self.stop_daemon)
-                return False
+                should_stop = True
             else:
                 response = {"status": "error", "message": f"Unknown command: {data}"}
-                
+
             conn.sendall(json.dumps(response).encode("utf-8"))
             conn.close()
-        except BlockingIOError:
-            pass
+
+            if should_stop:
+                self.schedule_ui_callback(self.stop_daemon)
+                return False
         except Exception as e:
-            print(f"[Socket Error] {e}")
-            
+            print(f"[Client Handling Error] {e}")
+
+        return True
+
+    def schedule_ui_callback(self, func):
+        if self.engine == "gtk":
+            from gi.repository import GLib
+            GLib.idle_add(func)
+        elif self.engine == "qt":
+            from overlay_qt import QTimer
+            QTimer.singleShot(0, func)
+
+    def poll_socket_clients(self):
+        if not self.running:
+            return False
+
+        # 1. Accept from TCP socket
+        try:
+            conn, _ = self.server_tcp.accept()
+            self.handle_client(conn)
+        except (BlockingIOError, OSError):
+            pass
+
+        # 2. Accept from Unix socket if available
+        if self.server_unix:
+            try:
+                conn, _ = self.server_unix.accept()
+                self.handle_client(conn)
+            except (BlockingIOError, OSError):
+                pass
+
         return True
 
     def check_reminder_schedule(self):
@@ -165,11 +235,8 @@ class ReminderDaemon:
         next_time = self.config.get("next_reminder_time", 0)
         
         if next_time > 0 and now >= next_time:
-            # Check if screen is locked before triggering
             if self.is_screen_locked():
-                # Screen is locked, defer check until unlocked
                 return True
-                
             self.trigger_reminder()
             
         return True
@@ -195,7 +262,6 @@ class ReminderDaemon:
             snooze_mins = value if value > 0 else self.config.get("snooze_minutes", 10)
             self.config["next_reminder_time"] = now + (snooze_mins * 60)
         elif action_type == "dismiss":
-            # Dismiss sets to default interval
             interval = self.config.get("interval_minutes", 60)
             self.config["next_reminder_time"] = now + (interval * 60)
             
@@ -208,34 +274,59 @@ class ReminderDaemon:
     def stop_daemon(self):
         self.running = False
         try:
-            self.overlay.hide_overlay()
+            self.overlay.hide_overlay(animated=False)
         except Exception:
             pass
             
-        if os.path.exists(SOCKET_FILE):
+        try:
+            self.server_tcp.close()
+        except Exception:
+            pass
+            
+        if self.server_unix:
             try:
-                os.unlink(SOCKET_FILE)
-            except OSError:
+                self.server_unix.close()
+            except Exception:
                 pass
-                
-        if os.path.exists(PID_FILE):
-            try:
-                os.unlink(PID_FILE)
-            except OSError:
-                pass
-                
-        Gtk.main_quit()
+
+        for fpath in (PORT_FILE, SOCKET_FILE, PID_FILE):
+            if os.path.exists(fpath):
+                try:
+                    os.unlink(fpath)
+                except OSError:
+                    pass
+
+        if self.engine == "gtk":
+            from gi.repository import Gtk
+            Gtk.main_quit()
+        elif self.engine == "qt":
+            from overlay_qt import QApplication
+            app = QApplication.instance()
+            if app:
+                app.quit()
+
         return False
 
 def run_daemon(test=False):
-    # Write PID
     pid = os.getpid()
     with open(PID_FILE, "w") as f:
         f.write(str(pid))
         
     daemon = ReminderDaemon(test_on_start=test)
-    print(f"💧 Water Reminder Daemon started (PID {pid})")
-    Gtk.main()
+    print(f"💧 Water Reminder Daemon started (PID {pid}, Engine: {daemon.engine.upper()})")
+
+    if daemon.engine == "gtk":
+        from gi.repository import Gtk
+        Gtk.main()
+    elif daemon.engine == "qt":
+        from overlay_qt import QApplication
+        app = QApplication.instance()
+        if not app:
+            app = QApplication(sys.argv)
+        exec_func = getattr(app, "exec", getattr(app, "exec_", None))
+        if exec_func:
+            exec_func()
+
     print("💧 Water Reminder Daemon stopped.")
 
 if __name__ == "__main__":
