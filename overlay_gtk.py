@@ -3,8 +3,9 @@ import sys
 import math
 import time
 
-# Try importing GTK3 for Linux/Ubuntu (preinstalled with python3-gi)
-GTK_AVAILABLE = False
+# Force X11 backend on Linux so floating overlays can freely position and stay on top
+if sys.platform.startswith("linux") and os.environ.get("DISPLAY"):
+    os.environ["GDK_BACKEND"] = "x11"
 if sys.platform != "win32":
     try:
         import gi
@@ -188,7 +189,10 @@ class WaterReminderOverlay(Gtk.Window):
         self.set_keep_above(True)
         self.set_skip_taskbar_hint(True)
         self.set_skip_pager_hint(True)
-        self.set_type_hint(Gdk.WindowTypeHint.UTILITY)
+        self.stick()  # Visible on all workspaces
+        self.set_type_hint(Gdk.WindowTypeHint.NOTIFICATION)
+        self.connect("map", lambda w: self.reposition_bottom_right())
+        self.connect("realize", lambda w: self.reposition_bottom_right())
         
         # Visual transparency
         screen = self.get_screen()
@@ -541,19 +545,22 @@ class WaterReminderOverlay(Gtk.Window):
     def reposition_bottom_right(self):
         display = Gdk.Display.get_default()
         if not display:
-            return
+            return False
         mon = display.get_primary_monitor() or display.get_monitor(0)
         if not mon:
-            return
-        geom = mon.get_geometry()
+            return False
+        geom = mon.get_workarea() if hasattr(mon, "get_workarea") else mon.get_geometry()
         
-        # Calculate window width and height from actual allocation
         alloc = self.get_allocation()
-        win_w = max(alloc.width, 600)
-        win_h = max(alloc.height, 490)
+        win_w = max(alloc.width, 616)
+        win_h = max(alloc.height, 500)
         pos_x = geom.x + geom.width - win_w - 20
-        pos_y = geom.y + geom.height - win_h - 30
+        pos_y = geom.y + geom.height - win_h - 20
         self.move(pos_x, pos_y)
+        if self.get_window():
+            self.get_window().move(pos_x, pos_y)
+            self.get_window().raise_()
+        return False
 
     def show_overlay(self):
         if self.smoke_timer_id:
@@ -576,7 +583,13 @@ class WaterReminderOverlay(Gtk.Window):
             self.image_widget.set_from_pixbuf(self.frames[0])
             
         self.show_all()
+        self.stick()
+        self.set_keep_above(True)
+        self.present()
         self.reposition_bottom_right()
+        GLib.idle_add(self.reposition_bottom_right)
+        GLib.timeout_add(50, self.reposition_bottom_right)
+        GLib.timeout_add(150, self.reposition_bottom_right)
         
         if self.anim_timer_id:
             GLib.source_remove(self.anim_timer_id)

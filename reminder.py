@@ -15,6 +15,10 @@ from config import (
     PID_FILE, SOCKET_FILE, PORT_FILE, load_config, save_config, reset_glasses_count, get_today_str
 )
 
+# Force X11 backend on Linux so overlay can freely position and stay on top
+if sys.platform.startswith("linux") and os.environ.get("DISPLAY"):
+    os.environ["GDK_BACKEND"] = "x11"
+
 IS_WINDOWS = sys.platform == "win32"
 IS_LINUX = sys.platform.startswith("linux")
 
@@ -198,10 +202,14 @@ def cmd_start():
                 close_fds=True
             )
         else:
+            env = dict(os.environ)
+            if os.environ.get("DISPLAY"):
+                env["GDK_BACKEND"] = "x11"
             proc = subprocess.Popen(
                 [sys.executable, os.path.join(BASE_DIR, "reminder.py"), "daemon"],
                 stdout=log,
                 stderr=log,
+                env=env,
                 preexec_fn=os.setpgrp,
                 close_fds=True
             )

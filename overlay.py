@@ -1,6 +1,10 @@
 import os
 import sys
 
+# Force X11 backend on Linux for floating overlay & positioning
+if sys.platform.startswith("linux") and os.environ.get("DISPLAY"):
+    os.environ["GDK_BACKEND"] = "x11"
+
 # Determine UI engine based on OS and installed packages
 ENGINE = None
 WaterReminderOverlay = None

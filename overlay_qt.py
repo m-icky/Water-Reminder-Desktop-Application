@@ -479,12 +479,12 @@ if QT_AVAILABLE:
             screen = QApplication.primaryScreen()
             if not screen:
                 return
-            geom = screen.geometry()
+            geom = screen.availableGeometry() if hasattr(screen, "availableGeometry") else screen.geometry()
             self.adjustSize()
-            w = self.width()
-            h = self.height()
+            w = max(self.width(), 616)
+            h = max(self.height(), 500)
             pos_x = geom.x() + geom.width() - w - 20
-            pos_y = geom.y() + geom.height() - h - 30
+            pos_y = geom.y() + geom.height() - h - 20
             self.move(pos_x, pos_y)
 
         def show_overlay(self):
@@ -505,7 +505,10 @@ if QT_AVAILABLE:
                 self.char_label.setPixmap(self.char_frames[0])
 
             self.show()
+            self.raise_()
             self.reposition_bottom_right()
+            QTimer.singleShot(50, self.reposition_bottom_right)
+            QTimer.singleShot(150, self.reposition_bottom_right)
             self.anim_timer.start(50)
 
         def on_anim_tick(self):

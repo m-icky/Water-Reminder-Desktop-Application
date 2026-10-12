@@ -6,8 +6,8 @@ import socket
 import json
 
 # Ensure X11 backend for reliable positioning & overlay on Linux
-if sys.platform.startswith("linux"):
-    os.environ.setdefault("GDK_BACKEND", "x11")
+if sys.platform.startswith("linux") and os.environ.get("DISPLAY"):
+    os.environ["GDK_BACKEND"] = "x11"
 
 from config import (
     load_config, save_config, reset_glasses_count, PID_FILE, SOCKET_FILE, PORT_FILE
