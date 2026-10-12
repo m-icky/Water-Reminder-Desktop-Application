@@ -327,33 +327,48 @@ if QT_AVAILABLE:
 
             row = QHBoxLayout()
             pill_style = (
-                "QPushButton { background: white; color: #0277bd; font-size: 12px; font-weight: 600; "
-                "border-radius: 9px; padding: 6px 10px; border: 1px solid rgba(2, 119, 189, 0.3); } "
+                "QPushButton { background: white; color: #0277bd; font-size: 11px; font-weight: 600; "
+                "border-radius: 9px; padding: 6px 8px; border: 1px solid rgba(2, 119, 189, 0.3); } "
                 "QPushButton:hover { background: #e1f5fe; }"
             )
 
-            for mins, label in [(30, "30 Mins"), (60, "1 Hour"), (120, "2 Hours")]:
+            for mins, label in [(30, "30 Mins"), (60, "1 Hour"), (90, "1.5 Hours"), (120, "2 Hours")]:
                 btn = QPushButton(label)
                 btn.setStyleSheet(pill_style)
                 btn.clicked.connect(lambda checked, m=mins: self.confirm_next_interval(m))
                 row.addWidget(btn)
             layout.addLayout(row)
 
-            # Custom spin
+            # Custom duration row: Hours & Minutes
             custom_row = QHBoxLayout()
             lbl_c = QLabel("Custom:")
             lbl_c.setStyleSheet("font-size: 12px; color: #455a64;")
             custom_row.addWidget(lbl_c)
 
-            self.spin_custom = QSpinBox()
-            self.spin_custom.setRange(5, 300)
-            self.spin_custom.setSingleStep(5)
-            self.spin_custom.setValue(self.config.get("interval_minutes", 60))
-            custom_row.addWidget(self.spin_custom)
+            self.spin_hours = QSpinBox()
+            self.spin_hours.setRange(0, 12)
+            self.spin_hours.setValue(1)
+            self.spin_hours.setStyleSheet("background: white; color: #0b4f9c; font-weight: 700; border: 1px solid rgba(0, 122, 242, 0.35); border-radius: 6px; padding: 2px;")
+            custom_row.addWidget(self.spin_hours)
+
+            lbl_h = QLabel("hr")
+            lbl_h.setStyleSheet("font-size: 11px; color: #455a64;")
+            custom_row.addWidget(lbl_h)
+
+            self.spin_mins = QSpinBox()
+            self.spin_mins.setRange(0, 55)
+            self.spin_mins.setSingleStep(5)
+            self.spin_mins.setValue(0)
+            self.spin_mins.setStyleSheet("background: white; color: #0b4f9c; font-weight: 700; border: 1px solid rgba(0, 122, 242, 0.35); border-radius: 6px; padding: 2px;")
+            custom_row.addWidget(self.spin_mins)
+
+            lbl_m = QLabel("min")
+            lbl_m.setStyleSheet("font-size: 11px; color: #455a64;")
+            custom_row.addWidget(lbl_m)
 
             btn_set = QPushButton("Set")
             btn_set.setStyleSheet(pill_style)
-            btn_set.clicked.connect(lambda: self.confirm_next_interval(self.spin_custom.value()))
+            btn_set.clicked.connect(self.on_qt_custom_interval_set)
             custom_row.addWidget(btn_set)
             layout.addLayout(custom_row)
 
@@ -363,6 +378,14 @@ if QT_AVAILABLE:
             layout.addWidget(btn_back, 0, ALIGN_LEFT)
 
             return w
+
+        def on_qt_custom_interval_set(self):
+            h = self.spin_hours.value()
+            m = self.spin_mins.value()
+            total = (h * 60) + m
+            if total <= 0:
+                total = 15
+            self.confirm_next_interval(total)
 
         def create_settings_view(self):
             w = QWidget()
@@ -431,12 +454,21 @@ if QT_AVAILABLE:
             self.stack.setCurrentWidget(self.view_drank)
 
         def confirm_next_interval(self, minutes):
+            now = int(time.time())
             self.config = load_config()
-            self.config["interval_minutes"] = minutes
-            self.config["next_reminder_time"] = int(time.time()) + (minutes * 60)
+            self.config["next_reminder_time"] = now + (minutes * 60)
             save_config(self.config)
 
-            dur_str = f"{minutes} minutes" if minutes < 60 else (f"{minutes // 60} hour" if minutes == 60 else f"{minutes / 60:.1f} hours")
+            if minutes < 60:
+                dur_str = f"{minutes} minutes"
+            elif minutes % 60 == 0:
+                h = minutes // 60
+                dur_str = f"{h} hour" if h == 1 else f"{h} hours"
+            else:
+                h = minutes // 60
+                m = minutes % 60
+                dur_str = f"{h} hr {m} min"
+
             self.feedback_title.setText("🎉 Hydration Recorded!")
             self.feedback_sub.setText(f"Next reminder set for {dur_str} from now.")
             self.stack.setCurrentWidget(self.view_feedback)

@@ -244,7 +244,11 @@ class ReminderDaemon:
     def trigger_reminder(self):
         print(f"[{time.strftime('%X')}] Triggering water reminder overlay...")
         self.config = load_config()
-        self.config["last_reminder_time"] = int(time.time())
+        now = int(time.time())
+        interval = self.config.get("interval_minutes", 60)
+        # Advance next reminder time immediately so check_reminder_schedule does not loop while overlay is open
+        self.config["next_reminder_time"] = now + (interval * 60)
+        self.config["last_reminder_time"] = now
         save_config(self.config)
         self.overlay.show_overlay()
         return False

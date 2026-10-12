@@ -1,11 +1,11 @@
 {
   "interval_minutes": 60,
   "snooze_minutes": 10,
-  "sound_enabled": true,
-  "next_reminder_time": 1791820416,
-  "last_reminder_time": 1791816806,
-  "last_drank_time": 1791813997,
-  "glasses_today": 1,
+  "sound_enabled": false,
+  "next_reminder_time": 1791820967,
+  "last_reminder_time": 1791817353,
+  "last_drank_time": 1791816910,
+  "glasses_today": 2,
   "today_date": "2026-10-12",
   "daily_history": {
     "2026-10-11": 7

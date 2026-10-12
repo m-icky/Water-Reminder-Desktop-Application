@@ -124,6 +124,36 @@ window {
     font-weight: 700;
     color: #2e7d32;
 }
+
+spinbutton {
+    background: #ffffff;
+    color: #0b4f9c;
+    border: 1.5px solid rgba(0, 122, 242, 0.35);
+    border-radius: 8px;
+    padding: 1px 3px;
+    font-size: 13px;
+    font-weight: 700;
+}
+spinbutton entry {
+    background: transparent;
+    color: #0b4f9c;
+    font-weight: 700;
+    border: none;
+    box-shadow: none;
+    min-width: 26px;
+    padding: 1px 2px;
+}
+spinbutton button {
+    background: rgba(0, 150, 255, 0.12);
+    color: #0277bd;
+    border: none;
+    border-radius: 5px;
+    padding: 1px 4px;
+}
+spinbutton button:hover {
+    background: rgba(0, 150, 255, 0.28);
+    color: #01579b;
+}
 """
 
 class SpeechBubble(Gtk.Box):
@@ -374,18 +404,18 @@ class WaterReminderOverlay(Gtk.Window):
         
         # Secondary Action: Snooze
         snooze_mins = self.config.get("snooze_minutes", 10)
-        btn_snooze = Gtk.Button(label=f"⏰ Snooze ({snooze_mins} mins)")
-        btn_snooze.get_style_context().add_class("btn-snooze")
-        btn_snooze.connect("clicked", self.on_click_snooze)
-        box.pack_start(btn_snooze, False, False, 2)
+        self.btn_snooze = Gtk.Button(label=f"⏰ Snooze ({snooze_mins} mins)")
+        self.btn_snooze.get_style_context().add_class("btn-snooze")
+        self.btn_snooze.connect("clicked", self.on_click_snooze)
+        box.pack_start(self.btn_snooze, False, False, 2)
         
         # Footer Action Row
         footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         
-        btn_settings = Gtk.Button(label=f"⚙️ Interval: {self.config.get('interval_minutes', 60)}m")
-        btn_settings.get_style_context().add_class("btn-link")
-        btn_settings.connect("clicked", lambda b: self.stack.set_visible_child_name("settings"))
-        footer.pack_start(btn_settings, False, False, 0)
+        self.btn_interval_settings = Gtk.Button(label=f"⚙️ Interval: {self.config.get('interval_minutes', 60)}m")
+        self.btn_interval_settings.get_style_context().add_class("btn-link")
+        self.btn_interval_settings.connect("clicked", lambda b: self.stack.set_visible_child_name("settings"))
+        footer.pack_start(self.btn_interval_settings, False, False, 0)
         
         btn_dismiss = Gtk.Button(label="✕ Close")
         btn_dismiss.get_style_context().add_class("btn-link")
@@ -410,8 +440,8 @@ class WaterReminderOverlay(Gtk.Window):
         sub.get_style_context().add_class("subtitle-label")
         box.pack_start(sub, False, False, 0)
         
-        # Preset Pill Buttons
-        presets_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        # Quick Presets: 30 Mins, 1 Hour, 1.5 Hours, 2 Hours
+        presets_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         
         btn_30 = Gtk.Button(label="30 Mins")
         btn_30.get_style_context().add_class("btn-pill")
@@ -422,32 +452,49 @@ class WaterReminderOverlay(Gtk.Window):
         btn_60.get_style_context().add_class("btn-pill")
         btn_60.connect("clicked", lambda b: self.confirm_next_interval(60))
         presets_box.pack_start(btn_60, True, True, 0)
+
+        btn_90 = Gtk.Button(label="1.5 Hours")
+        btn_90.get_style_context().add_class("btn-pill")
+        btn_90.connect("clicked", lambda b: self.confirm_next_interval(90))
+        presets_box.pack_start(btn_90, True, True, 0)
         
         btn_120 = Gtk.Button(label="2 Hours")
         btn_120.get_style_context().add_class("btn-pill")
         btn_120.connect("clicked", lambda b: self.confirm_next_interval(120))
         presets_box.pack_start(btn_120, True, True, 0)
         
-        box.pack_start(presets_box, False, False, 4)
+        box.pack_start(presets_box, False, False, 2)
         
-        # Custom duration row
-        custom_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        # Custom duration row: Hours and Minutes
+        custom_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         lbl_custom = Gtk.Label(label="Custom:")
         lbl_custom.get_style_context().add_class("subtitle-label")
         custom_row.pack_start(lbl_custom, False, False, 0)
         
-        self.spin_custom = Gtk.SpinButton.new_with_range(5, 300, 5)
-        self.spin_custom.set_value(float(self.config.get("interval_minutes", 60)))
-        custom_row.pack_start(self.spin_custom, True, True, 0)
+        # Hours spin
+        self.spin_hours = Gtk.SpinButton.new_with_range(0, 12, 1)
+        self.spin_hours.set_value(1)
+        self.spin_hours.set_width_chars(2)
+        custom_row.pack_start(self.spin_hours, False, False, 0)
         
-        lbl_m = Gtk.Label(label="mins")
-        lbl_m.get_style_context().add_class("subtitle-label")
-        custom_row.pack_start(lbl_m, False, False, 0)
+        lbl_hr = Gtk.Label(label="hr")
+        lbl_hr.get_style_context().add_class("subtitle-label")
+        custom_row.pack_start(lbl_hr, False, False, 0)
+        
+        # Minutes spin
+        self.spin_mins = Gtk.SpinButton.new_with_range(0, 55, 5)
+        self.spin_mins.set_value(0)
+        self.spin_mins.set_width_chars(2)
+        custom_row.pack_start(self.spin_mins, False, False, 0)
+        
+        lbl_min = Gtk.Label(label="min")
+        lbl_min.get_style_context().add_class("subtitle-label")
+        custom_row.pack_start(lbl_min, False, False, 0)
         
         btn_set_custom = Gtk.Button(label="Set")
         btn_set_custom.get_style_context().add_class("btn-pill")
-        btn_set_custom.connect("clicked", lambda b: self.confirm_next_interval(int(self.spin_custom.get_value())))
-        custom_row.pack_start(btn_set_custom, False, False, 0)
+        btn_set_custom.connect("clicked", self.on_custom_interval_set)
+        custom_row.pack_start(btn_set_custom, True, True, 2)
         
         box.pack_start(custom_row, False, False, 2)
         
@@ -459,21 +506,29 @@ class WaterReminderOverlay(Gtk.Window):
         
         return box
 
+    def on_custom_interval_set(self, widget):
+        h = int(self.spin_hours.get_value())
+        m = int(self.spin_mins.get_value())
+        total_mins = (h * 60) + m
+        if total_mins <= 0:
+            total_mins = 15  # Fallback minimum 15 mins
+        self.confirm_next_interval(total_mins)
+
     def create_settings_view(self):
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         
         title = Gtk.Label(label="⚙️ Reminder Settings")
         title.set_xalign(0)
         title.get_style_context().add_class("title-label")
         box.pack_start(title, False, False, 0)
         
+        # Row 1: Default Interval
         lbl_def = Gtk.Label(label="Default Interval:")
         lbl_def.set_xalign(0)
         lbl_def.get_style_context().add_class("subtitle-label")
         box.pack_start(lbl_def, False, False, 0)
         
-        # Row of interval options
-        intervals_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        intervals_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
         for mins in [30, 45, 60, 90, 120]:
             btn = Gtk.Button(label=f"{mins}m")
             btn.get_style_context().add_class("btn-pill")
@@ -481,20 +536,54 @@ class WaterReminderOverlay(Gtk.Window):
             intervals_box.pack_start(btn, True, True, 0)
         box.pack_start(intervals_box, False, False, 2)
         
+        # Row 2: Default Snooze
+        lbl_snz = Gtk.Label(label="Default Snooze:")
+        lbl_snz.set_xalign(0)
+        lbl_snz.get_style_context().add_class("subtitle-label")
+        box.pack_start(lbl_snz, False, False, 0)
+        
+        snooze_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
+        for smins in [5, 10, 15, 20, 30]:
+            btn = Gtk.Button(label=f"{smins}m")
+            btn.get_style_context().add_class("btn-pill")
+            btn.connect("clicked", lambda b, m=smins: self.set_snooze_duration(m))
+            snooze_box.pack_start(btn, True, True, 0)
+        box.pack_start(snooze_box, False, False, 2)
+
         # Sound Toggle
         sound_on = self.config.get("sound_enabled", True)
         self.btn_sound_toggle = Gtk.Button(label=f"🔊 Sound: {'ON' if sound_on else 'OFF'}")
         self.btn_sound_toggle.get_style_context().add_class("btn-snooze")
         self.btn_sound_toggle.connect("clicked", self.toggle_sound)
-        box.pack_start(self.btn_sound_toggle, False, False, 4)
+        box.pack_start(self.btn_sound_toggle, False, False, 2)
         
         # Back Button
         btn_back = Gtk.Button(label="← Back")
         btn_back.get_style_context().add_class("btn-link")
         btn_back.connect("clicked", lambda b: self.stack.set_visible_child_name("prompt"))
-        box.pack_start(btn_back, False, False, 2)
+        box.pack_start(btn_back, False, False, 0)
         
         return box
+
+    def set_snooze_duration(self, minutes):
+        self.config = load_config()
+        self.config["snooze_minutes"] = minutes
+        save_config(self.config)
+        self.btn_snooze.set_label(f"⏰ Snooze ({minutes} mins)")
+        self.feedback_title.set_text("⚙️ Setting Updated!")
+        self.feedback_sub.set_text(f"Default snooze duration set to {minutes}m.")
+        self.stack.set_visible_child_name("feedback")
+        self.schedule_auto_hide(1000)
+
+    def set_default_interval(self, minutes):
+        self.config = load_config()
+        self.config["interval_minutes"] = minutes
+        save_config(self.config)
+        self.btn_interval_settings.set_label(f"⚙️ Interval: {minutes}m")
+        self.feedback_title.set_text("⚙️ Setting Updated!")
+        self.feedback_sub.set_text(f"Default reminder interval set to {minutes}m.")
+        self.stack.set_visible_child_name("feedback")
+        self.schedule_auto_hide(1000)
 
     def create_feedback_view(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -520,12 +609,22 @@ class WaterReminderOverlay(Gtk.Window):
         self.stack.set_visible_child_name("drank")
 
     def confirm_next_interval(self, minutes):
+        now = int(time.time())
+        next_time = now + (minutes * 60)
         self.config = load_config()
-        self.config["interval_minutes"] = minutes
-        self.config["next_reminder_time"] = int(time.time()) + (minutes * 60)
+        self.config["next_reminder_time"] = next_time
         save_config(self.config)
         
-        dur_str = f"{minutes} minutes" if minutes < 60 else (f"{minutes // 60} hour" if minutes == 60 else f"{minutes / 60:.1f} hours")
+        if minutes < 60:
+            dur_str = f"{minutes} minutes"
+        elif minutes % 60 == 0:
+            h = minutes // 60
+            dur_str = f"{h} hour" if h == 1 else f"{h} hours"
+        else:
+            h = minutes // 60
+            m = minutes % 60
+            dur_str = f"{h} hr {m} min"
+            
         self.feedback_title.set_text("🎉 Hydration Recorded!")
         self.feedback_sub.set_text(f"Next reminder set for {dur_str} from now.")
         self.stack.set_visible_child_name("feedback")

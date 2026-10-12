@@ -58,3 +58,9 @@
 [08:18:41 PM] Triggering water reminder overlay...
 [Overlay Action] dismiss: 0
 💧 Water Reminder Daemon stopped.
+💧 Water Reminder Daemon started (PID 1253172, Engine: GTK)
+[08:23:26 PM] Triggering water reminder overlay...
+[Overlay Action] dismiss: 0
+[08:25:04 PM] Triggering water reminder overlay...
+[Overlay Action] dismiss: 0
+💧 Water Reminder Daemon stopped.
