@@ -10,9 +10,51 @@ if sys.platform.startswith("linux") and os.environ.get("DISPLAY"):
     os.environ["GDK_BACKEND"] = "x11"
 
 from config import (
-    load_config, save_config, reset_glasses_count, PID_FILE, SOCKET_FILE, PORT_FILE
+    load_config, save_config, reset_glasses_count, PID_FILE, SOCKET_FILE, PORT_FILE, LOCK_FILE
 )
 from overlay import WaterReminderOverlay, ENGINE
+
+_lock_file_handle = None
+
+def acquire_instance_lock():
+    global _lock_file_handle
+    try:
+        _lock_file_handle = open(LOCK_FILE, "w")
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(_lock_file_handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(_lock_file_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except (BlockingIOError, OSError, IOError):
+        if _lock_file_handle:
+            try:
+                _lock_file_handle.close()
+            except Exception:
+                pass
+            _lock_file_handle = None
+        return False
+
+def release_instance_lock():
+    global _lock_file_handle
+    if _lock_file_handle:
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                msvcrt.locking(_lock_file_handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(_lock_file_handle.fileno(), fcntl.LOCK_UN)
+            _lock_file_handle.close()
+        except Exception:
+            pass
+        _lock_file_handle = None
+        if os.path.exists(LOCK_FILE):
+            try:
+                os.unlink(LOCK_FILE)
+            except OSError:
+                pass
 
 class ReminderDaemon:
     def __init__(self, test_on_start=False):
@@ -237,11 +279,15 @@ class ReminderDaemon:
         if next_time > 0 and now >= next_time:
             if self.is_screen_locked():
                 return True
+            if hasattr(self.overlay, "is_overlay_visible") and self.overlay.is_overlay_visible():
+                return True
             self.trigger_reminder()
             
         return True
 
     def trigger_reminder(self):
+        if hasattr(self.overlay, "is_overlay_visible") and self.overlay.is_overlay_visible():
+            return False
         print(f"[{time.strftime('%X')}] Triggering water reminder overlay...")
         self.config = load_config()
         now = int(time.time())
@@ -293,12 +339,14 @@ class ReminderDaemon:
             except Exception:
                 pass
 
-        for fpath in (PORT_FILE, SOCKET_FILE, PID_FILE):
+        for fpath in (PORT_FILE, SOCKET_FILE, PID_FILE, LOCK_FILE):
             if os.path.exists(fpath):
                 try:
                     os.unlink(fpath)
                 except OSError:
                     pass
+
+        release_instance_lock()
 
         if self.engine == "gtk":
             from gi.repository import Gtk
@@ -312,6 +360,11 @@ class ReminderDaemon:
         return False
 
 def run_daemon(test=False):
+    # Enforce strict single-instance daemon lock
+    if not acquire_instance_lock():
+        print("⚠️ Water Reminder Daemon is ALREADY running. Exiting duplicate process.")
+        sys.exit(0)
+
     pid = os.getpid()
     with open(PID_FILE, "w") as f:
         f.write(str(pid))
@@ -332,6 +385,7 @@ def run_daemon(test=False):
             exec_func()
 
     print("💧 Water Reminder Daemon stopped.")
+    release_instance_lock()
 
 if __name__ == "__main__":
     test_mode = "--test" in sys.argv

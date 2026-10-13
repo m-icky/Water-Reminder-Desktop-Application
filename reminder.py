@@ -12,7 +12,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from config import (
-    PID_FILE, SOCKET_FILE, PORT_FILE, load_config, save_config, reset_glasses_count, get_today_str
+    PID_FILE, SOCKET_FILE, PORT_FILE, LOCK_FILE, load_config, save_config, reset_glasses_count, get_today_str
 )
 
 # Force X11 backend on Linux so overlay can freely position and stay on top
@@ -233,7 +233,7 @@ def cmd_stop():
     pid = get_running_pid()
     if not pid:
         print("○ Water Reminder is not currently running.")
-        for fpath in (PID_FILE, SOCKET_FILE, PORT_FILE):
+        for fpath in (PID_FILE, SOCKET_FILE, PORT_FILE, LOCK_FILE):
             if os.path.exists(fpath):
                 try: os.unlink(fpath)
                 except OSError: pass
@@ -254,7 +254,7 @@ def cmd_stop():
         kill_process(pid)
             
     # Clean files
-    for fpath in (PID_FILE, SOCKET_FILE, PORT_FILE):
+    for fpath in (PID_FILE, SOCKET_FILE, PORT_FILE, LOCK_FILE):
         if os.path.exists(fpath):
             try: os.unlink(fpath)
             except OSError: pass
@@ -336,7 +336,7 @@ WshShell.Run "{py_exe} \"\"\"{script_path}\"\"\" daemon", 0, False
         # Linux autostart
         script_sh = os.path.join(BASE_DIR, "reminder.sh")
         if action == "enable":
-            # 1. Desktop Autostart entry
+            # 1. Desktop Autostart entry (Official standard for X11 & Wayland graphical desktop sessions)
             os.makedirs(AUTOSTART_DIR, exist_ok=True)
             desktop_content = f"""[Desktop Entry]
 Type=Application
@@ -354,37 +354,18 @@ Categories=Utility;
                 f.write(desktop_content)
             os.chmod(AUTOSTART_DESKTOP_FILE, 0o755)
             
-            # 2. Systemd user service
-            os.makedirs(SYSTEMD_USER_DIR, exist_ok=True)
-            service_content = f"""[Unit]
-Description=Water Reminder Desktop Application
-After=graphical-session.target
-PartOf=graphical-session.target
-
-[Service]
-Type=simple
-WorkingDirectory={BASE_DIR}
-ExecStart=/usr/bin/python3 {BASE_DIR}/reminder.py daemon
-Restart=on-failure
-RestartSec=5
-Environment=DISPLAY=:0
-Environment=GDK_BACKEND=x11
-
-[Install]
-WantedBy=graphical-session.target
-"""
-            with open(SYSTEMD_SERVICE_FILE, "w") as f:
-                f.write(service_content)
-                
-            try:
-                subprocess.run(["systemctl", "--user", "daemon-reload"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run(["systemctl", "--user", "enable", "water-reminder.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
+            # Clean up and disable duplicate systemd service if present so two processes do not run
+            if os.path.exists(SYSTEMD_SERVICE_FILE):
+                try:
+                    subprocess.run(["systemctl", "--user", "stop", "water-reminder.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.run(["systemctl", "--user", "disable", "water-reminder.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    os.unlink(SYSTEMD_SERVICE_FILE)
+                    subprocess.run(["systemctl", "--user", "daemon-reload"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
                 
             print("✅ Ubuntu/Linux Auto-start ENABLED!")
             print(f"   • Created XDG Autostart: {AUTOSTART_DESKTOP_FILE}")
-            print(f"   • Created Systemd User Service: {SYSTEMD_SERVICE_FILE}")
             print("   The script will now start automatically when you power on or log in!")
             
         elif action == "disable":
@@ -392,6 +373,7 @@ WantedBy=graphical-session.target
                 os.unlink(AUTOSTART_DESKTOP_FILE)
             if os.path.exists(SYSTEMD_SERVICE_FILE):
                 try:
+                    subprocess.run(["systemctl", "--user", "stop", "water-reminder.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     subprocess.run(["systemctl", "--user", "disable", "water-reminder.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except Exception:
                     pass

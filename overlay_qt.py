@@ -476,7 +476,7 @@ if QT_AVAILABLE:
             if self.on_action_callback:
                 self.on_action_callback("drank", minutes)
 
-            self.auto_hide_timer.start(1200)
+            self.auto_hide_timer.start(700)
 
         def on_click_snooze(self):
             snooze_mins = self.config.get("snooze_minutes", 10)
@@ -491,7 +491,7 @@ if QT_AVAILABLE:
             if self.on_action_callback:
                 self.on_action_callback("snooze", snooze_mins)
 
-            self.auto_hide_timer.start(800)
+            self.auto_hide_timer.start(600)
 
         def on_click_dismiss(self):
             if self.on_action_callback:
@@ -505,7 +505,7 @@ if QT_AVAILABLE:
             self.feedback_title.setText("⚙️ Setting Updated!")
             self.feedback_sub.setText(f"Default reminder interval set to {minutes}m.")
             self.stack.setCurrentWidget(self.view_feedback)
-            self.auto_hide_timer.start(1000)
+            self.auto_hide_timer.start(700)
 
         def toggle_sound(self):
             self.config = load_config()
@@ -513,6 +513,9 @@ if QT_AVAILABLE:
             self.config["sound_enabled"] = not cur
             save_config(self.config)
             self.btn_sound.setText(f"🔊 Sound: {'ON' if self.config['sound_enabled'] else 'OFF'}")
+
+        def is_overlay_visible(self):
+            return bool(self.isVisible())
 
         def reposition_bottom_right(self):
             screen = QApplication.primaryScreen()
@@ -529,6 +532,8 @@ if QT_AVAILABLE:
         def show_overlay(self):
             if self.smoke_timer.isActive():
                 self.smoke_timer.stop()
+            if self.auto_hide_timer.isActive():
+                self.auto_hide_timer.stop()
 
             self.is_closing = False
             self.bubble.show()

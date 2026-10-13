@@ -120,8 +120,7 @@ To ensure the water reminder starts automatically whenever you turn on your comp
 ```
 
 This creates:
-- **XDG Autostart Desktop Entry**: `~/.config/autostart/water-reminder.desktop`
-- **Systemd User Service**: `~/.config/systemd/user/water-reminder.service`
+- **XDG Autostart Desktop Entry**: `~/.config/autostart/water-reminder.desktop` (launches seamlessly when you log into your graphical desktop session).
 
 To disable automatic startup at any time:
 ```bash

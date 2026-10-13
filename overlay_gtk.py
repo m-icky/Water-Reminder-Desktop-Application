@@ -632,8 +632,8 @@ class WaterReminderOverlay(Gtk.Window):
         if self.on_action_callback:
             self.on_action_callback("drank", minutes)
             
-        # Hide after 1.2 seconds
-        self.schedule_auto_hide(1200)
+        # Hide after 700ms feedback
+        self.schedule_auto_hide(700)
 
     def on_click_snooze(self, widget):
         snooze_mins = self.config.get("snooze_minutes", 10)
@@ -648,12 +648,12 @@ class WaterReminderOverlay(Gtk.Window):
         if self.on_action_callback:
             self.on_action_callback("snooze", snooze_mins)
             
-        self.schedule_auto_hide(800)
+        self.schedule_auto_hide(600)
 
     def on_click_dismiss(self, widget):
         if self.on_action_callback:
             self.on_action_callback("dismiss", 0)
-        self.hide_overlay()
+        self.hide_overlay(animated=True)
 
     def set_default_interval(self, minutes):
         self.config = load_config()
@@ -662,7 +662,7 @@ class WaterReminderOverlay(Gtk.Window):
         self.feedback_title.set_text("⚙️ Setting Updated!")
         self.feedback_sub.set_text(f"Default reminder interval set to {minutes}m.")
         self.stack.set_visible_child_name("feedback")
-        self.schedule_auto_hide(1000)
+        self.schedule_auto_hide(700)
 
     def toggle_sound(self, widget):
         self.config = load_config()
@@ -671,10 +671,19 @@ class WaterReminderOverlay(Gtk.Window):
         save_config(self.config)
         self.btn_sound_toggle.set_label(f"🔊 Sound: {'ON' if self.config['sound_enabled'] else 'OFF'}")
 
+    def is_overlay_visible(self):
+        return bool(self.get_visible())
+
+    def _on_auto_hide_timeout(self):
+        self.feedback_timer_id = None
+        self.hide_overlay(animated=True)
+        return False
+
     def schedule_auto_hide(self, delay_ms):
         if self.feedback_timer_id:
             GLib.source_remove(self.feedback_timer_id)
-        self.feedback_timer_id = GLib.timeout_add(delay_ms, lambda: self.hide_overlay(animated=True))
+            self.feedback_timer_id = None
+        self.feedback_timer_id = GLib.timeout_add(delay_ms, self._on_auto_hide_timeout)
 
     def reposition_bottom_right(self):
         display = Gdk.Display.get_default()
@@ -700,6 +709,9 @@ class WaterReminderOverlay(Gtk.Window):
         if self.smoke_timer_id:
             GLib.source_remove(self.smoke_timer_id)
             self.smoke_timer_id = None
+        if self.feedback_timer_id:
+            GLib.source_remove(self.feedback_timer_id)
+            self.feedback_timer_id = None
             
         self.is_closing = False
         self.bubble.show()
