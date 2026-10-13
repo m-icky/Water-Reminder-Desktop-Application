@@ -1,122 +1,436 @@
-# 💧 Cross-Platform Water Reminder Desktop Application (Ubuntu Linux & Windows)
+# 💧 Cross-Platform Water Reminder Desktop Application
 
-A modern, transparent desktop character reminder for **Ubuntu Linux** and **Windows** (also compatible with macOS) that reminds you to drink water at custom intervals (default: every 1 hour) with interactive options, daily hydration tracking, smooth cartoon smoke exit animations, and automatic system startup.
-
----
-
-## ✨ Features
-
-- **Cross-Platform Compatibility**:
-  - **Ubuntu Linux**: Runs natively out-of-the-box using pre-installed GTK3 (`python3-gi`) without needing heavy extra packages.
-  - **Windows 10/11**: Runs using PyQt6/PySide6 with standard Windows audio (`winsound`), Windows Lock Screen detection, and silent Startup execution.
-  - Automatic UI engine detection: GTK3 on Linux, Qt on Windows.
-- **Transparent Character Animation**: Renders your custom character animation (`reminder.mp4`) as a borderless, floating overlay on top of all applications (`always-on-top`) at the bottom-right corner of the screen.
-- **Dynamic Speech Bubble**: A frosted-glass cloud dialog with a pointer tail directed at the character.
-- **Interactive Action Buttons**:
-  - **✅ Yes, I Drank Water**:
-    - Tracks your daily hydration count (e.g., `Today: 3 🥛`).
-    - Opens a follow-up selector asking when to remind you next: **30 mins**, **1 hour**, **2 hours**, or custom minutes.
-    - Displays friendly confirmation and closes with a smooth smoke animation.
-  - **⏰ Snooze (10 mins)**:
-    - Snoozes the reminder and reminds you again in 10 minutes.
-  - **⚙️ Settings**:
-    - Easily adjust default intervals or toggle sound on/off.
-  - **✕ Dismiss**:
-    - Dismisses the reminder window until the next scheduled interval.
-- **💨 Smoke Disappearance Animation**:
-  - When closing or taking action, a smooth 10-frame cartoon smoke animation (`smoke_01.png` to `smoke_10.png`) plays as the character vanishes.
-- **Audio Sound Effect**: Plays the voice/sound effect whenever the reminder appears (using native `winsound` on Windows and PulseAudio/ALSA on Linux).
-- **Smart Sleep & Lock Screen Detection**:
-  - **Linux**: Queries DBus screensaver to avoid firing when the laptop is locked or asleep.
-  - **Windows**: Checks `OpenInputDesktop` API to detect Windows lock screen (Win+L) or screen sleep.
-  - Triggers immediately when you unlock your computer if a reminder was due.
-- **Auto-Start on Boot/Login**:
-  - **Linux**: Configured via XDG Autostart (`~/.config/autostart/water-reminder.desktop`) and Systemd user service.
-  - **Windows**: Configured via Windows Startup folder (`WaterReminder.vbs`) to start silently in the background on logon.
-- **Daily Hydration Counter & Date Rollover**:
-  - Automatically resets the water intake count to `0` at midnight (`00:00`) every day.
-  - Archives previous days' totals into history (`config.json`) so you can track your hydration over time.
-  - Manual reset option available anytime via `reset-count`.
+A modern, transparent desktop character reminder for **Ubuntu Linux** and **Windows** (also compatible with macOS) that reminds you to drink water at custom intervals (default: every 1 hour) with interactive speech bubbles, daily hydration tracking, smooth cartoon smoke exit animations, smart lock-screen detection, and automatic system startup.
 
 ---
 
-## 🛠️ Installation & Setup
+## 📑 Table of Contents
 
-### On Ubuntu Linux
-Ubuntu includes GTK3 and Python pre-installed. No pip installations required:
+1. [Platform Comparison: How It Works](#-platform-comparison-how-it-works)
+2. [🐧 How to Work in Ubuntu Linux](#-how-to-work-in-ubuntu-linux)
+   - [Prerequisites & System Setup](#1-prerequisites--system-setup-ubuntu)
+   - [Step 1: Test the Overlay](#2-test-the-overlay-ubuntu)
+   - [Step 2: Start the Background Daemon](#3-start-the-background-daemon-ubuntu)
+   - [Step 3: Enable Auto-Start on Boot / Login](#4-enable-auto-start-on-boot--login-ubuntu)
+   - [Step 4: Check Status & Daily Hydration](#5-check-status--daily-hydration-ubuntu)
+   - [Ubuntu Troubleshooting & Tips](#6-ubuntu-troubleshooting--tips)
+3. [🪟 How to Work in Windows](#-how-to-work-in-windows)
+   - [Prerequisites & System Setup](#1-prerequisites--system-setup-windows)
+   - [Step 1: Test the Overlay](#2-test-the-overlay-windows)
+   - [Step 2: Start the Background Daemon (Silent)](#3-start-the-background-daemon-silent-windows)
+   - [Step 3: Enable Auto-Start on Windows Logon](#4-enable-auto-start-on-windows-logon)
+   - [Step 4: Check Status & Daily Hydration](#5-check-status--daily-hydration-windows)
+   - [Windows Troubleshooting & Tips](#6-windows-troubleshooting--tips)
+4. [🎮 Interactive Overlay Controls](#-interactive-overlay-controls)
+5. [📊 Complete Command Reference](#-complete-command-reference)
+6. [⚙️ Configuration (`config.json`)](#️-configuration-configjson)
+7. [📁 Project File Structure](#-project-file-structure)
+
+---
+
+## ⚡ Platform Comparison: How It Works
+
+The application detects your operating system automatically and uses the native UI engine and audio system best suited for that platform:
+
+| Feature | 🐧 Ubuntu Linux | 🪟 Windows (10 / 11) |
+|---|---|---|
+| **GUI Toolkit** | Native **GTK3** (`python3-gi`, Cairo surface) | Native **PyQt6** (`PyQt6` / `PySide6`) |
+| **Window Layer** | Frameless, floating X11 overlay (`always-on-top`) | Frameless, translucent Qt window (`WindowStaysOnTopHint`) |
+| **Audio Playback** | Native PulseAudio / PipeWire / ALSA (`paplay` / `pw-play` / `aplay`) | Native Windows Multimedia API (`winsound.PlaySound`) |
+| **Lock Screen Detection** | DBus (`org.gnome.ScreenSaver` / `org.freedesktop.ScreenSaver`) | Windows Win32 API (`OpenInputDesktop`) |
+| **Silent Background Daemon** | Background POSIX process group via `./reminder.sh` | Detached `pythonw.exe` process (no command prompt window) |
+| **Autostart Mechanism** | XDG Autostart (`~/.config/autostart`) & Systemd User Service | Startup folder script (`%APPDATA%\...\Startup\WaterReminder.vbs`) |
+| **IPC Communication** | Localhost TCP Socket (`127.0.0.1:<port>`) + Unix domain socket | Localhost TCP Socket (`127.0.0.1:<port>`) |
+
+---
+
+## 🐧 How to Work in Ubuntu Linux
+
+Ubuntu desktop includes Python and GTK3 pre-installed. Follow these steps to set up and run the application.
+
+### 1. Prerequisites & System Setup (Ubuntu)
+
+Open your terminal (`Ctrl + Alt + T`) and navigate to the project directory:
+
 ```bash
-# Optional: Ensure GTK3 bindings are present (normally already installed on Ubuntu Desktop)
-sudo apt update && sudo apt install -y python3-gi gir1.2-gtk-3.0
+cd ~/Documents/Reminder
 ```
 
-### On Windows
-Open PowerShell or Command Prompt in the repository folder:
-```cmd
+Install the required GTK3 and imaging bindings (usually already present on Ubuntu Desktop):
+
+```bash
+# Update package index and install GTK3 Python bindings & Pillow
+sudo apt update
+sudo apt install -y python3 python3-gi gir1.2-gtk-3.0 python3-pil pulseaudio-utils
+```
+
+*(Optional)* If you prefer running inside a virtual environment using pip:
+```bash
 pip install -r requirements.txt
 ```
 
----
-
-## 🚀 Usage Commands
-
-### Ubuntu / Linux Commands:
+Ensure the launcher scripts are executable:
 ```bash
-./reminder.sh test               # Immediately test the character on your screen
-./reminder.sh status             # Check daemon status, today's glasses, and next reminder
-./reminder.sh start              # Start the background daemon
-./reminder.sh stop               # Fully stop the reminder daemon
-./reminder.sh restart            # Restart the daemon
-./reminder.sh interval 45        # Change reminder interval (in minutes)
-./reminder.sh reset-count        # Reset today's water glasses count to 0
-./reminder.sh autostart enable   # Enable automatic startup on login
-./reminder.sh autostart disable  # Disable automatic startup
+chmod +x reminder.sh reminder.py
 ```
 
-### Windows Commands:
+---
+
+### 2. Test the Overlay (Ubuntu)
+
+Before starting the background service, you can immediately test the character animation, speech bubble, buttons, and sound effect on your screen:
+
+```bash
+./reminder.sh test
+```
+*or directly:*
+```bash
+python3 reminder.py test
+```
+
+> **What happens**: The character will appear floating on the bottom-right corner of your screen. Click **"Yes, I Drank Water"**, **"Snooze"**, or **"Dismiss"** to watch the smooth smoke exit animation.
+
+---
+
+### 3. Start the Background Daemon (Ubuntu)
+
+Start the reminder service in the background:
+
+```bash
+./reminder.sh start
+```
+
+You will see:
+```text
+🚀 Starting Water Reminder daemon...
+✅ Water Reminder daemon successfully started! (PID: 12345)
+   The reminder character will appear every hour on the bottom-right.
+```
+
+The daemon runs silently in the background, keeping track of your schedule even while you work.
+
+---
+
+### 4. Enable Auto-Start on Boot / Login (Ubuntu)
+
+To ensure the water reminder starts automatically whenever you turn on your computer or log into Ubuntu:
+
+```bash
+./reminder.sh autostart enable
+```
+
+This creates:
+- **XDG Autostart Desktop Entry**: `~/.config/autostart/water-reminder.desktop`
+- **Systemd User Service**: `~/.config/systemd/user/water-reminder.service`
+
+To disable automatic startup at any time:
+```bash
+./reminder.sh autostart disable
+```
+
+---
+
+### 5. Check Status & Daily Hydration (Ubuntu)
+
+To check if the daemon is running, inspect how many glasses of water you have consumed today, and view the countdown to your next reminder:
+
+```bash
+./reminder.sh status
+```
+
+**Example output:**
+```text
+==================================================
+           💧 WATER REMINDER STATUS           
+==================================================
+  ● Platform:       Ubuntu/Linux
+  ● Status:         RUNNING (PID: 12345, Engine: GTK)
+  ● Today's Date:   2026-10-13 (Resets daily at 00:00)
+  ● Glasses Today:  3 🥛
+  ● Interval:       Every 60 minutes
+  ● Next Reminder:  In 42.5 minutes (2550s)
+  ● Screen State:   Active / Unlocked
+  ● Sound Effects:  Enabled 🔊
+  ● Past Days:      2026-10-12: 8🥛 | 2026-10-11: 7🥛
+  ● Auto-start:     Enabled (Starts on boot/login) ✅
+==================================================
+```
+
+#### Other Handy Ubuntu Commands:
+- **Change reminder interval to 45 minutes**:
+  ```bash
+  ./reminder.sh interval 45
+  ```
+- **Reset today's water glass count back to 0**:
+  ```bash
+  ./reminder.sh reset-count
+  ```
+- **Stop the daemon completely**:
+  ```bash
+  ./reminder.sh stop
+  ```
+- **Restart the daemon**:
+  ```bash
+  ./reminder.sh restart
+  ```
+
+---
+
+### 6. Ubuntu Troubleshooting & Tips
+
+- **Wayland vs X11 Display**:
+  - The script automatically exports `GDK_BACKEND=x11` inside `reminder.sh` and `reminder.py`. This ensures proper transparent window rendering and borderless `always-on-top` positioning on both standard X11 and GNOME Wayland sessions (via XWayland).
+- **Missing GTK Module Error (`ModuleNotFoundError: No module named 'gi'`)**:
+  - Run `sudo apt install python3-gi gir1.2-gtk-3.0`.
+  - Alternatively, if you use a Python virtualenv where system GTK packages are not linked, install PyQt6 via `pip install PyQt6` and the application will seamlessly switch to the Qt engine on Linux.
+- **Audio Output**:
+  - Ubuntu uses `paplay` (PulseAudio), `pw-play` (PipeWire), or `aplay` (ALSA) to play `reminder.wav`. Ensure your system volume is unmuted.
+- **Logs**:
+  - Check `reminder.log` in the project directory if the daemon fails to start:
+    ```bash
+    tail -f reminder.log
+    ```
+
+---
+
+## 🪟 How to Work in Windows
+
+On Windows 10 and 11, the application uses **PyQt6** for crisp floating transparent rendering and native Windows APIs for audio and lock detection.
+
+### 1. Prerequisites & System Setup (Windows)
+
+1. **Install Python**:
+   - If you do not have Python installed, download it from [python.org](https://www.python.org/) or install it from the Microsoft Store.
+   - ⚠️ **Important**: When installing Python from the installer, make sure to check the box: **"Add Python to PATH"**.
+
+2. **Open Command Prompt or PowerShell**:
+   - Press `Win + R`, type `cmd` (or `powershell`), and press Enter.
+   - Navigate to the project folder:
+     ```cmd
+     cd C:\path\to\Reminder
+     ```
+
+3. **Install Dependencies**:
+   Install the required Python packages (`PyQt6` and `Pillow`):
+   ```cmd
+   pip install -r requirements.txt
+   ```
+   *(If `pip` is not recognized, run: `python -m pip install -r requirements.txt`)*
+
+---
+
+### 2. Test the Overlay (Windows)
+
+Test the transparent character animation, dialog bubble, and audio immediately:
+
+In Command Prompt (`cmd`):
 ```cmd
-reminder.bat test               rem Immediately test the character on your screen
-reminder.bat status             rem Check daemon status, today's glasses, and next reminder
-reminder.bat start              rem Start the background daemon (runs silently via pythonw)
-reminder.bat stop               rem Fully stop the reminder daemon
-reminder.bat restart            rem Restart the daemon
-reminder.bat interval 45        rem Change reminder interval (in minutes)
-reminder.bat reset-count        rem Reset today's water glasses count to 0
-reminder.bat autostart enable   rem Enable automatic startup on Windows boot/logon
-reminder.bat autostart disable  rem Disable automatic startup
+reminder.bat test
+```
+*or in PowerShell:*
+```powershell
+.\reminder.bat test
+```
+*or using python directly:*
+```cmd
+python reminder.py test
 ```
 
-*(You can also run directly with `python reminder.py <command>` on any OS.)*
+> **What happens**: The animated character will appear at the bottom-right corner of your desktop, playing `reminder.wav` through Windows native audio (`winsound`).
 
 ---
 
-## 📊 Command Reference
+### 3. Start the Background Daemon (Silent) (Windows)
 
-| Command | Description |
-|---|---|
-| `test` | **Immediately show the character reminder on screen** to test animations, audio, and buttons |
-| `status` | View running status, today's date, glasses drank today, next reminder countdown, and history |
-| `start` | Start the background daemon in the background |
-| `stop` | **Fully stop** the reminder daemon and clean up sockets |
-| `restart` | Stop and restart the daemon |
-| `reset-count` | **Reset today's water count back to 0** manually |
-| `interval <mins>` | Change reminder interval (e.g. `interval 60` for 1 hour, `interval 30` for 30 minutes) |
-| `autostart enable` | Enable launch on system boot / user login |
-| `autostart disable` | Disable automatic launch on boot |
+To start the reminder background service:
+
+```cmd
+reminder.bat start
+```
+
+> 💡 **Silent Execution**: The daemon is automatically launched via `pythonw.exe` (Windows Python Windowless Launcher). **No black command prompt window will stay open!** You can close your terminal and the reminder will continue running in the background.
 
 ---
 
-## 📁 File Structure
+### 4. Enable Auto-Start on Windows Logon
 
-- `reminder.py` — Cross-platform CLI entry point and daemon manager.
-- `reminder.sh` — Linux launcher script.
-- `reminder.bat` — Windows launcher script.
-- `requirements.txt` — Python dependencies (PyQt6 on Windows, Pillow).
-- `daemon.py` — Background service managing schedule, localhost TCP IPC socket, and screensaver checks.
-- `overlay.py` — Intelligent UI engine switcher (dispatches to GTK on Linux or Qt on Windows).
-- `overlay_gtk.py` — Native GTK3 floating transparent overlay for Ubuntu/Linux.
-- `overlay_qt.py` — Native PyQt/PySide floating transparent overlay for Windows/macOS.
-- `audio.py` — Cross-platform sound player (`winsound` on Windows, `paplay`/`aplay` on Linux).
-- `config.py` & `config.json` — Persistent configuration, daily hydration tracking, and date archiving.
-- `assets/frames/` — 202 processed transparent animation frames (`f_0001.png` to `f_0202.png`).
-- `assets/smoke/` — 10 extracted transparent smoke frames (`smoke_01.png` to `smoke_10.png`) and closing animation sequence.
-- `reminder.wav` & `reminder.ogg` — Reminder audio.
+To automatically start the reminder whenever you power on or log into your Windows user account:
+
+```cmd
+reminder.bat autostart enable
+```
+
+**How it works**:
+- It creates a silent launcher script `WaterReminder.vbs` inside your personal Windows Startup folder:
+  `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\WaterReminder.vbs`
+- When you log into Windows, Windows Script Host silently executes `pythonw.exe reminder.py daemon` without flashing any console window.
+
+To disable Windows startup:
+```cmd
+reminder.bat autostart disable
+```
+
+---
+
+### 5. Check Status & Daily Hydration (Windows)
+
+Check the current status and tracker info:
+
+```cmd
+reminder.bat status
+```
+
+**Example output:**
+```text
+==================================================
+           💧 WATER REMINDER STATUS           
+==================================================
+  ● Platform:       Windows
+  ● Status:         RUNNING (PID: 8412, Engine: QT)
+  ● Today's Date:   2026-10-13 (Resets daily at 00:00)
+  ● Glasses Today:  4 🥛
+  ● Interval:       Every 60 minutes
+  ● Next Reminder:  In 38.0 minutes (2280s)
+  ● Screen State:   Active / Unlocked
+  ● Sound Effects:  Enabled 🔊
+  ● Past Days:      2026-10-12: 6🥛 | 2026-10-11: 8🥛
+  ● Auto-start:     Enabled (Starts on boot/login) ✅
+==================================================
+```
+
+#### Other Handy Windows Commands:
+- **Change reminder interval to 45 minutes**:
+  ```cmd
+  reminder.bat interval 45
+  ```
+- **Reset today's water glass count back to 0**:
+  ```cmd
+  reminder.bat reset-count
+  ```
+- **Stop the daemon**:
+  ```cmd
+  reminder.bat stop
+  ```
+- **Restart the daemon**:
+  ```cmd
+  reminder.bat restart
+  ```
+
+---
+
+### 6. Windows Troubleshooting & Tips
+
+- **`'python'` or `'pip'` is not recognized**:
+  - Python was installed without the "Add Python to PATH" option. Re-run the Python installer, select **Modify**, and check **Add Python to environment variables**.
+- **PyQt6 Installation Errors**:
+  - Update `pip` before installing:
+    ```cmd
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+    ```
+- **Windows Lock Screen Detection**:
+  - When you lock Windows (`Win + L`) or your monitor enters power-saving sleep, the daemon detects that the desktop is inactive via the `OpenInputDesktop` API. It holds off triggering overlays until you unlock your screen.
+- **Audio Output**:
+  - Audio uses standard Windows `winsound` API. No codecs or additional media players are required. Ensure your Windows sound output device is connected and volume is turned up.
+- **Viewing Logs on Windows**:
+  - If you encounter issues, view `reminder.log` in the project folder with Notepad:
+    ```cmd
+    notepad reminder.log
+    ```
+
+---
+
+## 🎮 Interactive Overlay Controls
+
+Whenever the reminder character appears on screen:
+
+- **✅ Yes, I Drank Water**:
+  - Increments your daily hydration counter (`Today: X 🥛`).
+  - Displays quick follow-up buttons asking when to remind you next:
+    - **30 mins** | **1 hour** | **2 hours** | **Custom**
+  - Triggers a smooth smoke puff animation (`assets/smoke/smoke_01.png` - `smoke_10.png`) as the character vanishes.
+- **⏰ Snooze (10 mins)**:
+  - Temporarily dismisses the overlay and reminds you again in 10 minutes.
+- **⚙️ Settings**:
+  - Quick access to adjust reminder frequency or toggle audio alerts.
+- **✕ Dismiss**:
+  - Closes the overlay immediately until the next scheduled reminder interval.
+
+---
+
+## 📊 Complete Command Reference
+
+| Command | Ubuntu / Linux Syntax | Windows Syntax | Description |
+|---|---|---|---|
+| **Test** | `./reminder.sh test` | `reminder.bat test` | Immediately shows the floating reminder on screen to verify animations, sound, and buttons. |
+| **Status** | `./reminder.sh status` | `reminder.bat status` | Displays running PID, active engine, next reminder countdown, screen lock status, and today's water glasses count. |
+| **Start** | `./reminder.sh start` | `reminder.bat start` | Starts the background daemon service. |
+| **Stop** | `./reminder.sh stop` | `reminder.bat stop` | Stops the running daemon and releases ports/sockets. |
+| **Restart** | `./reminder.sh restart` | `reminder.bat restart` | Restarts the daemon service. |
+| **Set Interval** | `./reminder.sh interval <mins>` | `reminder.bat interval <mins>` | Changes reminder interval (e.g., `interval 30` or `interval 60`). |
+| **Reset Counter** | `./reminder.sh reset-count` | `reminder.bat reset-count` | Manually resets today's water glasses counter back to 0. |
+| **Enable Autostart**| `./reminder.sh autostart enable` | `reminder.bat autostart enable`| Registers the app to start automatically on system boot or user logon. |
+| **Disable Autostart**| `./reminder.sh autostart disable`| `reminder.bat autostart disable`| Removes system boot / login startup registration. |
+
+*(Note: On both platforms, you can also run `python reminder.py <command>`.)*
+
+---
+
+## ⚙️ Configuration (`config.json`)
+
+All persistent settings, today's hydration metrics, and history are saved in `config.json` at the root of the project:
+
+```json
+{
+  "interval_minutes": 60,
+  "snooze_minutes": 10,
+  "sound_enabled": true,
+  "next_reminder_time": 1791868385,
+  "last_reminder_time": 1791864768,
+  "last_drank_time": 1791864785,
+  "glasses_today": 3,
+  "today_date": "2026-10-13",
+  "daily_history": {
+    "2026-10-11": 7,
+    "2026-10-12": 5
+  }
+}
+```
+
+- **Daily Auto-Reset**: At midnight (`00:00`), `glasses_today` automatically resets to `0`, and the previous day's count is archived into `daily_history`.
+- **Sound Toggle**: Toggle `sound_enabled` between `true` and `false` to turn audio on or off.
+- **Custom Audio**: Replace `reminder.wav` with any `.wav` audio file of your choice.
+
+---
+
+## 📁 Project File Structure
+
+```text
+Reminder/
+├── reminder.sh            # Linux launcher script (sets GDK_BACKEND=x11)
+├── reminder.bat           # Windows launcher script (CMD & PowerShell compatible)
+├── reminder.py            # Main CLI entry point and daemon manager
+├── daemon.py              # Background scheduling daemon, IPC server & lock screen monitor
+├── overlay.py             # UI switcher: auto-detects GTK (Linux) or Qt (Windows)
+├── overlay_gtk.py         # Native GTK3 floating transparent overlay for Ubuntu
+├── overlay_qt.py          # Native PyQt6 floating transparent overlay for Windows
+├── audio.py               # Cross-platform audio player (winsound / paplay / aplay)
+├── config.py              # Configuration manager & daily intake tracker
+├── config.json            # Persistent user settings and history
+├── requirements.txt       # Python dependencies (PyQt6 on Windows, Pillow)
+├── assets/
+│   ├── frames/            # 202 character animation frames (f_0001.png - f_0202.png)
+│   └── smoke/             # 10 cartoon smoke frames for smooth exit animation
+├── reminder.wav           # Reminder audio alert (WAV format)
+├── reminder.ogg           # Reminder audio alert (OGG format)
+├── reminder.mp4           # Reference reminder animation video
+├── reminder.log           # Background service log file
+├── reminder.pid           # Running daemon Process ID
+└── reminder.port          # TCP IPC communication port
+```
+
+---
+
+## 📜 License
+
+MIT License. Feel free to customize the character animations, audio, and intervals to stay healthy and hydrated!
