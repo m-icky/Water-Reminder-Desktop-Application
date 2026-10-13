@@ -18,7 +18,10 @@ if sys.platform != "win32":
     except Exception:
         GTK_AVAILABLE = False
 
-from config import FRAMES_DIR, SMOKE_DIR, AUDIO_FILE, load_config, save_config, record_glass_drank
+from config import (
+    FRAMES_DIR, SMOKE_DIR, SOUNDS_DIR, AUDIO_FILE, load_config, save_config,
+    record_glass_drank, get_audio_file_path, list_available_sounds
+)
 from audio import SoundPlayer
 
 CSS_STYLE = b"""
@@ -48,6 +51,27 @@ window {
     font-weight: 700;
     border-radius: 10px;
     padding: 2px 7px;
+}
+
+.btn-gear {
+    background: rgba(0, 150, 255, 0.08);
+    color: #455a64;
+    font-size: 13px;
+    border-radius: 8px;
+    padding: 2px 7px;
+    border: 1px solid rgba(0, 150, 255, 0.22);
+}
+.btn-gear:hover {
+    background: rgba(0, 150, 255, 0.22);
+    color: #01579b;
+}
+
+.combo-audio {
+    background: white;
+    font-size: 11px;
+    border-radius: 8px;
+    border: 1px solid rgba(2, 119, 189, 0.35);
+    padding: 2px 4px;
 }
 
 .btn-drank {
@@ -211,7 +235,9 @@ class WaterReminderOverlay(Gtk.Window):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
         self.on_action_callback = on_action_callback
         self.config = load_config()
-        self.sound_player = SoundPlayer(AUDIO_FILE)
+        self.sound_player = SoundPlayer(get_audio_file_path(self.config))
+        self.combo_audio = None
+        self.btn_preview_audio = None
         
         # Window properties
         self.set_title("Water Reminder")
@@ -376,7 +402,7 @@ class WaterReminderOverlay(Gtk.Window):
     def create_prompt_view(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         
-        # Header Row with Title and Glasses Badge
+        # Header Row with Title, Glasses Badge, and Gear Settings Button
         header_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         title = Gtk.Label(label="💧 Drink Water Reminder!")
         title.set_xalign(0)
@@ -385,7 +411,14 @@ class WaterReminderOverlay(Gtk.Window):
         
         self.badge_label = Gtk.Label(label=f"Today: {self.config.get('glasses_today', 0)} 🥛")
         self.badge_label.get_style_context().add_class("counter-badge")
-        header_row.pack_end(self.badge_label, False, False, 0)
+        header_row.pack_start(self.badge_label, False, False, 0)
+
+        # Dedicated Gear Icon Button for Settings & Audio
+        self.btn_gear = Gtk.Button(label="⚙️")
+        self.btn_gear.set_tooltip_text("Settings & Audio Customization")
+        self.btn_gear.get_style_context().add_class("btn-gear")
+        self.btn_gear.connect("clicked", lambda b: self.open_settings_view())
+        header_row.pack_end(self.btn_gear, False, False, 0)
         box.pack_start(header_row, False, False, 0)
         
         # Subtitle with bounded width
@@ -412,9 +445,9 @@ class WaterReminderOverlay(Gtk.Window):
         # Footer Action Row
         footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         
-        self.btn_interval_settings = Gtk.Button(label=f"⚙️ Interval: {self.config.get('interval_minutes', 60)}m")
+        self.btn_interval_settings = Gtk.Button(label="⚙️ Settings & Audio")
         self.btn_interval_settings.get_style_context().add_class("btn-link")
-        self.btn_interval_settings.connect("clicked", lambda b: self.stack.set_visible_child_name("settings"))
+        self.btn_interval_settings.connect("clicked", lambda b: self.open_settings_view())
         footer.pack_start(self.btn_interval_settings, False, False, 0)
         
         btn_dismiss = Gtk.Button(label="✕ Close")
@@ -515,14 +548,47 @@ class WaterReminderOverlay(Gtk.Window):
         self.confirm_next_interval(total_mins)
 
     def create_settings_view(self):
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
         
-        title = Gtk.Label(label="⚙️ Reminder Settings")
+        title = Gtk.Label(label="⚙️ Settings & Audio")
         title.set_xalign(0)
         title.get_style_context().add_class("title-label")
         box.pack_start(title, False, False, 0)
         
-        # Row 1: Default Interval
+        # Audio Section
+        lbl_audio = Gtk.Label(label="🎵 Reminder Sound Alert:")
+        lbl_audio.set_xalign(0)
+        lbl_audio.get_style_context().add_class("subtitle-label")
+        box.pack_start(lbl_audio, False, False, 0)
+        
+        audio_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.combo_audio = Gtk.ComboBoxText()
+        self.combo_audio.get_style_context().add_class("combo-audio")
+        self.populate_sound_options()
+        self.combo_audio.connect("changed", self.on_audio_combo_changed)
+        audio_row.pack_start(self.combo_audio, True, True, 0)
+        
+        self.btn_preview_audio = Gtk.Button(label="▶ Play")
+        self.btn_preview_audio.get_style_context().add_class("btn-pill")
+        self.btn_preview_audio.connect("clicked", self.on_click_preview_audio)
+        audio_row.pack_start(self.btn_preview_audio, False, False, 0)
+        box.pack_start(audio_row, False, False, 1)
+        
+        # Audio Actions Row: Add Custom Audio & Sound Toggle
+        audio_act_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        btn_add_audio = Gtk.Button(label="📁 Add Audio File...")
+        btn_add_audio.get_style_context().add_class("btn-pill")
+        btn_add_audio.connect("clicked", self.on_click_add_custom_audio)
+        audio_act_row.pack_start(btn_add_audio, True, True, 0)
+        
+        sound_on = self.config.get("sound_enabled", True)
+        self.btn_sound_toggle = Gtk.Button(label=f"🔊 Sound: {'ON' if sound_on else 'OFF'}")
+        self.btn_sound_toggle.get_style_context().add_class("btn-snooze")
+        self.btn_sound_toggle.connect("clicked", self.toggle_sound)
+        audio_act_row.pack_start(self.btn_sound_toggle, False, False, 0)
+        box.pack_start(audio_act_row, False, False, 1)
+
+        # Row 2: Default Interval
         lbl_def = Gtk.Label(label="Default Interval:")
         lbl_def.set_xalign(0)
         lbl_def.get_style_context().add_class("subtitle-label")
@@ -534,9 +600,9 @@ class WaterReminderOverlay(Gtk.Window):
             btn.get_style_context().add_class("btn-pill")
             btn.connect("clicked", lambda b, m=mins: self.set_default_interval(m))
             intervals_box.pack_start(btn, True, True, 0)
-        box.pack_start(intervals_box, False, False, 2)
+        box.pack_start(intervals_box, False, False, 1)
         
-        # Row 2: Default Snooze
+        # Row 3: Default Snooze
         lbl_snz = Gtk.Label(label="Default Snooze:")
         lbl_snz.set_xalign(0)
         lbl_snz.get_style_context().add_class("subtitle-label")
@@ -548,22 +614,127 @@ class WaterReminderOverlay(Gtk.Window):
             btn.get_style_context().add_class("btn-pill")
             btn.connect("clicked", lambda b, m=smins: self.set_snooze_duration(m))
             snooze_box.pack_start(btn, True, True, 0)
-        box.pack_start(snooze_box, False, False, 2)
-
-        # Sound Toggle
-        sound_on = self.config.get("sound_enabled", True)
-        self.btn_sound_toggle = Gtk.Button(label=f"🔊 Sound: {'ON' if sound_on else 'OFF'}")
-        self.btn_sound_toggle.get_style_context().add_class("btn-snooze")
-        self.btn_sound_toggle.connect("clicked", self.toggle_sound)
-        box.pack_start(self.btn_sound_toggle, False, False, 2)
+        box.pack_start(snooze_box, False, False, 1)
         
         # Back Button
-        btn_back = Gtk.Button(label="← Back")
+        btn_back = Gtk.Button(label="← Back to Reminder")
         btn_back.get_style_context().add_class("btn-link")
         btn_back.connect("clicked", lambda b: self.stack.set_visible_child_name("prompt"))
-        box.pack_start(btn_back, False, False, 0)
+        box.pack_start(btn_back, False, False, 1)
         
         return box
+
+    def toggle_sound(self, widget=None):
+        self.config = load_config()
+        cur = self.config.get("sound_enabled", True)
+        self.config["sound_enabled"] = not cur
+        save_config(self.config)
+        if hasattr(self, "btn_sound_toggle") and self.btn_sound_toggle:
+            self.btn_sound_toggle.set_label(f"🔊 Sound: {'ON' if self.config['sound_enabled'] else 'OFF'}")
+
+    def open_settings_view(self):
+        self.populate_sound_options()
+        sound_on = self.config.get("sound_enabled", True)
+        if hasattr(self, "btn_sound_toggle") and self.btn_sound_toggle:
+            self.btn_sound_toggle.set_label(f"🔊 Sound: {'ON' if sound_on else 'OFF'}")
+        self.stack.set_visible_child_name("settings")
+
+    def populate_sound_options(self):
+        if not hasattr(self, "combo_audio") or self.combo_audio is None:
+            return
+        self.combo_audio.remove_all()
+        sounds = list_available_sounds(self.config)
+        cur_sound = self.config.get("audio_file", "reminder.wav")
+        active_idx = 0
+        for idx, s in enumerate(sounds):
+            self.combo_audio.append(s["id"], s["name"])
+            if s["id"] == cur_sound or os.path.basename(s["path"]) == os.path.basename(cur_sound):
+                active_idx = idx
+        self.combo_audio.set_active(active_idx)
+
+    def on_audio_combo_changed(self, widget):
+        sound_id = self.combo_audio.get_active_id()
+        if not sound_id:
+            return
+        self.config = load_config()
+        self.config["audio_file"] = sound_id
+        save_config(self.config)
+        new_path = get_audio_file_path(self.config)
+        self.sound_player.set_audio_file(new_path)
+
+    def on_click_preview_audio(self, widget):
+        if self.sound_player.is_playing():
+            self.sound_player.stop()
+            self.btn_preview_audio.set_label("▶ Play")
+        else:
+            new_path = get_audio_file_path(self.config)
+            self.sound_player.play(new_path)
+            self.btn_preview_audio.set_label("■ Stop")
+            GLib.timeout_add(3500, self._reset_preview_btn)
+
+    def _reset_preview_btn(self):
+        if hasattr(self, "btn_preview_audio") and self.btn_preview_audio:
+            if not self.sound_player.is_playing():
+                self.btn_preview_audio.set_label("▶ Play")
+                return False
+        return True
+
+    def on_click_add_custom_audio(self, widget):
+        dialog = Gtk.FileChooserDialog(
+            title="Select Custom Audio Alert",
+            parent=self,
+            action=Gtk.FileChooserAction.OPEN
+        )
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Select Audio", Gtk.ResponseType.ACCEPT)
+        
+        filter_audio = Gtk.FileFilter()
+        filter_audio.set_name("Audio Files (*.wav, *.mp3, *.ogg, *.flac)")
+        filter_audio.add_pattern("*.wav")
+        filter_audio.add_pattern("*.WAV")
+        filter_audio.add_pattern("*.mp3")
+        filter_audio.add_pattern("*.MP3")
+        filter_audio.add_pattern("*.ogg")
+        filter_audio.add_pattern("*.OGG")
+        filter_audio.add_pattern("*.flac")
+        filter_audio.add_pattern("*.FLAC")
+        filter_audio.add_pattern("*.m4a")
+        dialog.add_filter(filter_audio)
+        
+        filter_all = Gtk.FileFilter()
+        filter_all.set_name("All Files")
+        filter_all.add_pattern("*")
+        dialog.add_filter(filter_all)
+        
+        response = dialog.run()
+        if response == Gtk.ResponseType.ACCEPT:
+            filename = dialog.get_filename()
+            if filename and os.path.exists(filename):
+                os.makedirs(SOUNDS_DIR, exist_ok=True)
+                dest_filename = os.path.basename(filename)
+                dest_path = os.path.join(SOUNDS_DIR, dest_filename)
+                import shutil
+                try:
+                    if os.path.abspath(filename) != os.path.abspath(dest_path):
+                        shutil.copy2(filename, dest_path)
+                    chosen_id = dest_filename
+                except Exception as e:
+                    chosen_id = filename
+                    
+                self.config = load_config()
+                self.config["audio_file"] = chosen_id
+                save_config(self.config)
+                
+                self.populate_sound_options()
+                new_p = get_audio_file_path(self.config)
+                self.sound_player.set_audio_file(new_p)
+                self.sound_player.play()
+                
+                self.feedback_title.set_text("🎵 Custom Audio Set!")
+                self.feedback_sub.set_text(f"Selected: {os.path.basename(filename)}")
+                self.stack.set_visible_child_name("feedback")
+                self.schedule_auto_hide(1200)
+        dialog.destroy()
 
     def set_snooze_duration(self, minutes):
         self.config = load_config()
@@ -655,22 +826,6 @@ class WaterReminderOverlay(Gtk.Window):
             self.on_action_callback("dismiss", 0)
         self.hide_overlay(animated=True)
 
-    def set_default_interval(self, minutes):
-        self.config = load_config()
-        self.config["interval_minutes"] = minutes
-        save_config(self.config)
-        self.feedback_title.set_text("⚙️ Setting Updated!")
-        self.feedback_sub.set_text(f"Default reminder interval set to {minutes}m.")
-        self.stack.set_visible_child_name("feedback")
-        self.schedule_auto_hide(700)
-
-    def toggle_sound(self, widget):
-        self.config = load_config()
-        cur = self.config.get("sound_enabled", True)
-        self.config["sound_enabled"] = not cur
-        save_config(self.config)
-        self.btn_sound_toggle.set_label(f"🔊 Sound: {'ON' if self.config['sound_enabled'] else 'OFF'}")
-
     def is_overlay_visible(self):
         return bool(self.get_visible())
 
@@ -719,7 +874,8 @@ class WaterReminderOverlay(Gtk.Window):
         self.badge_label.set_text(f"Today: {self.config.get('glasses_today', 0)} 🥛")
         self.stack.set_visible_child_name("prompt")
         
-        # Start sound if enabled
+        # Start sound if enabled using currently configured audio
+        self.sound_player.set_audio_file(get_audio_file_path(self.config))
         if self.config.get("sound_enabled", True):
             self.sound_player.play()
             

@@ -7,6 +7,7 @@ CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 FRAMES_DIR = os.path.join(ASSETS_DIR, "frames")
 SMOKE_DIR = os.path.join(ASSETS_DIR, "smoke")
+SOUNDS_DIR = os.path.join(ASSETS_DIR, "sounds")
 AUDIO_FILE = os.path.join(BASE_DIR, "reminder.wav")
 AUDIO_OGG = os.path.join(BASE_DIR, "reminder.ogg")
 PID_FILE = os.path.join(BASE_DIR, "reminder.pid")
@@ -18,6 +19,7 @@ DEFAULT_CONFIG = {
     "interval_minutes": 60,
     "snooze_minutes": 10,
     "sound_enabled": True,
+    "audio_file": "reminder.wav",
     "next_reminder_time": 0,
     "last_reminder_time": 0,
     "last_drank_time": 0,
@@ -25,6 +27,64 @@ DEFAULT_CONFIG = {
     "today_date": "",
     "daily_history": {}
 }
+
+def get_audio_file_path(config=None):
+    if config is None:
+        config = load_config()
+    configured = config.get("audio_file", "reminder.wav")
+    if configured:
+        # Check absolute path
+        if os.path.isabs(configured) and os.path.exists(configured):
+            return configured
+        # Check in SOUNDS_DIR
+        sounds_p = os.path.join(SOUNDS_DIR, configured)
+        if os.path.exists(sounds_p):
+            return sounds_p
+        # Check in BASE_DIR
+        base_p = os.path.join(BASE_DIR, configured)
+        if os.path.exists(base_p):
+            return base_p
+    # Fallback to default reminder.wav
+    if os.path.exists(AUDIO_FILE):
+        return AUDIO_FILE
+    if os.path.exists(AUDIO_OGG):
+        return AUDIO_OGG
+    return AUDIO_FILE
+
+def list_available_sounds(config=None):
+    sounds = []
+    seen_paths = set()
+    
+    # 1. Default alert (reminder.wav)
+    if os.path.exists(AUDIO_FILE):
+        sounds.append({"id": "reminder.wav", "name": "🔔 Default Alert (reminder.wav)", "path": AUDIO_FILE})
+        seen_paths.add(os.path.abspath(AUDIO_FILE))
+        
+    # 2. Check sounds inside assets/sounds
+    if os.path.exists(SOUNDS_DIR):
+        supported_exts = (".wav", ".mp3", ".ogg", ".flac", ".m4a")
+        for fname in sorted(os.listdir(SOUNDS_DIR)):
+            if fname.lower().endswith(supported_exts):
+                full_p = os.path.join(SOUNDS_DIR, fname)
+                abs_p = os.path.abspath(full_p)
+                if abs_p not in seen_paths:
+                    title = os.path.splitext(fname)[0].replace("_", " ").title()
+                    icon = "💧" if "water" in fname.lower() or "drop" in fname.lower() else "🎵"
+                    sounds.append({"id": fname, "name": f"{icon} {title} ({fname})", "path": full_p})
+                    seen_paths.add(abs_p)
+
+    # 3. Check configured custom file if external
+    if config is None:
+        config = load_config()
+    current_choice = config.get("audio_file")
+    if current_choice and os.path.isabs(current_choice) and os.path.exists(current_choice):
+        abs_p = os.path.abspath(current_choice)
+        if abs_p not in seen_paths:
+            fname = os.path.basename(current_choice)
+            sounds.append({"id": current_choice, "name": f"📁 Custom ({fname})", "path": current_choice})
+            seen_paths.add(abs_p)
+            
+    return sounds
 
 def get_today_str():
     return time.strftime("%Y-%m-%d")

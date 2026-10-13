@@ -2,6 +2,7 @@ import os
 import sys
 import math
 import time
+import shutil
 
 # Qt compatibility layer for PyQt6, PySide6, and PyQt5
 QT_AVAILABLE = False
@@ -10,7 +11,7 @@ QT_LIB = None
 try:
     from PyQt6.QtWidgets import (
         QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-        QStackedWidget, QSpinBox, QGraphicsDropShadowEffect
+        QStackedWidget, QSpinBox, QComboBox, QFileDialog, QGraphicsDropShadowEffect
     )
     from PyQt6.QtCore import Qt, QTimer, QPoint, QRectF
     from PyQt6.QtGui import (
@@ -36,7 +37,7 @@ except ImportError:
     try:
         from PySide6.QtWidgets import (
             QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-            QStackedWidget, QSpinBox, QGraphicsDropShadowEffect
+            QStackedWidget, QSpinBox, QComboBox, QFileDialog, QGraphicsDropShadowEffect
         )
         from PySide6.QtCore import Qt, QTimer, QPoint, QRectF
         from PySide6.QtGui import (
@@ -61,7 +62,7 @@ except ImportError:
         try:
             from PyQt5.QtWidgets import (
                 QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-                QStackedWidget, QSpinBox, QGraphicsDropShadowEffect
+                QStackedWidget, QSpinBox, QComboBox, QFileDialog, QGraphicsDropShadowEffect
             )
             from PyQt5.QtCore import Qt, QTimer, QPoint, QRectF
             from PyQt5.QtGui import (
@@ -87,7 +88,8 @@ except ImportError:
             QT_LIB = None
 
 from config import (
-    FRAMES_DIR, SMOKE_DIR, AUDIO_FILE, load_config, save_config, record_glass_drank
+    FRAMES_DIR, SMOKE_DIR, SOUNDS_DIR, AUDIO_FILE, load_config, save_config,
+    record_glass_drank, get_audio_file_path, list_available_sounds
 )
 from audio import SoundPlayer
 
@@ -154,7 +156,10 @@ if QT_AVAILABLE:
             super().__init__()
             self.on_action_callback = on_action_callback
             self.config = load_config()
-            self.sound_player = SoundPlayer(AUDIO_FILE)
+            self.sound_player = SoundPlayer(get_audio_file_path(self.config))
+            self.combo_audio = None
+            self.btn_preview_audio = None
+            self.preview_reset_timer = None
 
             # Window configuration
             self.setWindowTitle("Water Reminder")
@@ -269,6 +274,18 @@ if QT_AVAILABLE:
                 "font-size: 11px; font-weight: 700; border-radius: 8px; padding: 2px 6px;"
             )
             header.addWidget(self.badge_label, 0, ALIGN_RIGHT)
+
+            self.btn_gear = QPushButton("⚙️")
+            self.btn_gear.setToolTip("Customize Audio & Settings")
+            self.btn_gear.setCursor(CURSOR_POINTER)
+            self.btn_gear.setStyleSheet(
+                "QPushButton { background: rgba(0, 150, 255, 0.12); color: #0277bd; "
+                "font-size: 13px; font-weight: 700; border-radius: 8px; padding: 2px 7px; "
+                "border: 1px solid rgba(0, 150, 255, 0.25); } "
+                "QPushButton:hover { background: rgba(0, 150, 255, 0.25); color: #01579b; }"
+            )
+            self.btn_gear.clicked.connect(self.open_settings_view)
+            header.addWidget(self.btn_gear, 0, ALIGN_RIGHT)
             layout.addLayout(header)
 
             sub = QLabel("Time to hydrate! Grab a glass of water to keep your body energized and sharp.")
@@ -297,9 +314,9 @@ if QT_AVAILABLE:
             layout.addWidget(btn_snooze)
 
             footer = QHBoxLayout()
-            btn_settings = QPushButton(f"⚙️ Interval: {self.config.get('interval_minutes', 60)}m")
+            btn_settings = QPushButton("⚙️ Settings & Audio")
             btn_settings.setStyleSheet("background: transparent; color: #78909c; font-size: 11px; font-weight: 600; border: none;")
-            btn_settings.clicked.connect(lambda: self.stack.setCurrentWidget(self.view_settings))
+            btn_settings.clicked.connect(self.open_settings_view)
             footer.addWidget(btn_settings)
 
             btn_close = QPushButton("✕ Close")
@@ -391,20 +408,20 @@ if QT_AVAILABLE:
             w = QWidget()
             layout = QVBoxLayout(w)
             layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(8)
+            layout.setSpacing(6)
 
-            title = QLabel("⚙️ Reminder Settings")
-            title.setStyleSheet("font-size: 15px; font-weight: 800; color: #0b4f9c;")
+            title = QLabel("⚙️ Settings & Audio")
+            title.setStyleSheet("font-size: 14px; font-weight: 800; color: #0b4f9c;")
             layout.addWidget(title)
 
-            lbl = QLabel("Default Interval:")
-            lbl.setStyleSheet("font-size: 12px; color: #455a64;")
-            layout.addWidget(lbl)
+            lbl_int = QLabel("Default Interval:")
+            lbl_int.setStyleSheet("font-size: 11px; font-weight: 600; color: #455a64;")
+            layout.addWidget(lbl_int)
 
             row = QHBoxLayout()
             pill_style = (
                 "QPushButton { background: white; color: #0277bd; font-size: 11px; font-weight: 600; "
-                "border-radius: 8px; padding: 5px 8px; border: 1px solid rgba(2, 119, 189, 0.3); } "
+                "border-radius: 8px; padding: 4px 6px; border: 1px solid rgba(2, 119, 189, 0.3); } "
                 "QPushButton:hover { background: #e1f5fe; }"
             )
             for mins in [30, 45, 60, 90, 120]:
@@ -414,15 +431,63 @@ if QT_AVAILABLE:
                 row.addWidget(btn)
             layout.addLayout(row)
 
+            # Audio customization section
+            lbl_snd = QLabel("🔔 Reminder Alert Sound:")
+            lbl_snd.setStyleSheet("font-size: 11px; font-weight: 600; color: #455a64; margin-top: 4px;")
+            layout.addWidget(lbl_snd)
+
+            # Audio dropdown + preview button row
+            audio_row = QHBoxLayout()
+            self.combo_audio = QComboBox()
+            self.combo_audio.setCursor(CURSOR_POINTER)
+            self.combo_audio.setStyleSheet(
+                "QComboBox { background: white; color: #0b4f9c; font-size: 11px; font-weight: 600; "
+                "border: 1px solid rgba(0, 122, 242, 0.35); border-radius: 8px; padding: 4px 8px; } "
+                "QComboBox:hover { border-color: #007af2; } "
+                "QComboBox QAbstractItemView { background: white; color: #1e293b; "
+                "selection-background-color: #e1f5fe; selection-color: #0b4f9c; }"
+            )
+            self.combo_audio.currentIndexChanged.connect(self.on_qt_audio_combo_changed)
+            audio_row.addWidget(self.combo_audio, 1)
+
+            self.btn_preview_audio = QPushButton("▶ Play")
+            self.btn_preview_audio.setCursor(CURSOR_POINTER)
+            self.btn_preview_audio.setStyleSheet(
+                "QPushButton { background: #e0f2fe; color: #0284c7; font-size: 11px; font-weight: 700; "
+                "border: 1px solid #7dd3fc; border-radius: 8px; padding: 4px 10px; } "
+                "QPushButton:hover { background: #bae6fd; color: #0369a1; }"
+            )
+            self.btn_preview_audio.clicked.connect(self.on_click_preview_audio)
+            audio_row.addWidget(self.btn_preview_audio)
+            layout.addLayout(audio_row)
+
+            # Action buttons row: Add Audio File & Sound Toggle
+            btn_row = QHBoxLayout()
+            self.btn_add_audio = QPushButton("📁 Add Audio...")
+            self.btn_add_audio.setCursor(CURSOR_POINTER)
+            self.btn_add_audio.setStyleSheet(
+                "QPushButton { background: white; color: #0277bd; font-size: 11px; font-weight: 600; "
+                "border-radius: 8px; padding: 5px 8px; border: 1px dashed rgba(2, 119, 189, 0.5); } "
+                "QPushButton:hover { background: #f0f9ff; border-style: solid; }"
+            )
+            self.btn_add_audio.clicked.connect(self.on_click_add_custom_audio)
+            btn_row.addWidget(self.btn_add_audio, 1)
+
             sound_on = self.config.get("sound_enabled", True)
             self.btn_sound = QPushButton(f"🔊 Sound: {'ON' if sound_on else 'OFF'}")
+            self.btn_sound.setCursor(CURSOR_POINTER)
             self.btn_sound.setStyleSheet(
-                "background: rgba(225, 235, 245, 0.95); color: #37474f; "
-                "font-size: 12px; font-weight: 600; border-radius: 11px; padding: 7px 12px; "
-                "border: 1px solid rgba(0, 0, 0, 0.08);"
+                "QPushButton { background: rgba(225, 235, 245, 0.95); color: #37474f; "
+                "font-size: 11px; font-weight: 600; border-radius: 8px; padding: 5px 8px; "
+                "border: 1px solid rgba(0, 0, 0, 0.08); } "
+                "QPushButton:hover { background: rgba(210, 225, 240, 1); }"
             )
             self.btn_sound.clicked.connect(self.toggle_sound)
-            layout.addWidget(self.btn_sound)
+            btn_row.addWidget(self.btn_sound, 1)
+            layout.addLayout(btn_row)
+
+            # Populate combo
+            self.populate_sound_options()
 
             btn_back = QPushButton("← Back")
             btn_back.setStyleSheet("background: transparent; color: #78909c; font-size: 11px; font-weight: 600; border: none;")
@@ -507,6 +572,107 @@ if QT_AVAILABLE:
             self.stack.setCurrentWidget(self.view_feedback)
             self.auto_hide_timer.start(700)
 
+        def open_settings_view(self):
+            self.config = load_config()
+            sound_on = self.config.get("sound_enabled", True)
+            if hasattr(self, "btn_sound") and self.btn_sound:
+                self.btn_sound.setText(f"🔊 Sound: {'ON' if sound_on else 'OFF'}")
+            self.populate_sound_options()
+            self.stack.setCurrentWidget(self.view_settings)
+
+        def populate_sound_options(self):
+            if not self.combo_audio:
+                return
+            self.combo_audio.blockSignals(True)
+            self.combo_audio.clear()
+
+            sounds = list_available_sounds(self.config)
+            current_audio = self.config.get("audio_file", "reminder.wav")
+            curr_base = os.path.basename(current_audio)
+
+            active_idx = 0
+            for idx, s in enumerate(sounds):
+                snd_id = s["id"] if isinstance(s, dict) else s[1]
+                snd_name = s["name"] if isinstance(s, dict) else s[0]
+                self.combo_audio.addItem(snd_name, snd_id)
+                if snd_id == current_audio or os.path.basename(snd_id) == curr_base:
+                    active_idx = idx
+
+            self.combo_audio.setCurrentIndex(active_idx)
+            self.combo_audio.blockSignals(False)
+
+        def on_qt_audio_combo_changed(self, index):
+            if index < 0 or not self.combo_audio:
+                return
+            selected_key = self.combo_audio.itemData(index)
+            if not selected_key:
+                return
+
+            self.config = load_config()
+            self.config["audio_file"] = selected_key
+            save_config(self.config)
+
+            resolved_path = get_audio_file_path(self.config)
+            self.sound_player.set_audio_file(resolved_path)
+
+        def on_click_preview_audio(self):
+            if self.sound_player.is_playing():
+                self.sound_player.stop()
+                self._reset_qt_preview_btn()
+                return
+
+            audio_path = get_audio_file_path(self.config)
+            if not os.path.exists(audio_path):
+                return
+
+            self.sound_player.play(custom_path=audio_path)
+            self.btn_preview_audio.setText("■ Stop")
+
+            if self.preview_reset_timer:
+                self.preview_reset_timer.stop()
+            self.preview_reset_timer = QTimer(self)
+            self.preview_reset_timer.setSingleShot(True)
+            self.preview_reset_timer.timeout.connect(self._reset_qt_preview_btn)
+            self.preview_reset_timer.start(3000)
+
+        def _reset_qt_preview_btn(self):
+            if hasattr(self, "btn_preview_audio") and self.btn_preview_audio:
+                self.btn_preview_audio.setText("▶ Play")
+
+        def on_click_add_custom_audio(self):
+            dialog = QFileDialog(self, "Select Audio File", os.path.expanduser("~"))
+            dialog.setNameFilter("Audio Files (*.wav *.mp3 *.ogg *.flac *.m4a *.aac);;All Files (*)")
+            if hasattr(QFileDialog, "ViewMode"):
+                dialog.setViewMode(QFileDialog.ViewMode.Detail)
+            if dialog.exec():
+                selected_files = dialog.selectedFiles()
+                if not selected_files:
+                    return
+                src_path = selected_files[0]
+                if not os.path.isfile(src_path):
+                    return
+
+                os.makedirs(SOUNDS_DIR, exist_ok=True)
+                dest_filename = os.path.basename(src_path)
+                dest_path = os.path.join(SOUNDS_DIR, dest_filename)
+
+                try:
+                    if os.path.abspath(src_path) != os.path.abspath(dest_path):
+                        shutil.copy2(src_path, dest_path)
+                except Exception as e:
+                    print(f"[Warning] Failed to copy audio to sounds dir: {e}")
+                    dest_path = src_path
+
+                self.config = load_config()
+                self.config["audio_file"] = dest_filename
+                save_config(self.config)
+
+                self.sound_player.set_audio_file(get_audio_file_path(self.config))
+                self.populate_sound_options()
+
+                # Preview newly added audio
+                self.on_click_preview_audio()
+
         def toggle_sound(self):
             self.config = load_config()
             cur = self.config.get("sound_enabled", True)
@@ -538,6 +704,7 @@ if QT_AVAILABLE:
             self.is_closing = False
             self.bubble.show()
             self.config = load_config()
+            self.sound_player.set_audio_file(get_audio_file_path(self.config))
             self.badge_label.setText(f"Today: {self.config.get('glasses_today', 0)} 🥛")
             self.stack.setCurrentWidget(self.view_prompt)
 

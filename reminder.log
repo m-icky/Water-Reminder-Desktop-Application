@@ -64,3 +64,41 @@
 [08:25:04 PM] Triggering water reminder overlay...
 [Overlay Action] dismiss: 0
 💧 Water Reminder Daemon stopped.
+💧 Water Reminder Daemon started (PID 157624, Engine: GTK)
+[10:55:11 AM] Triggering water reminder overlay...
+[Overlay Action] snooze: 10
+[11:05:25 AM] Triggering water reminder overlay...
+[Overlay Action] drank: 60
+[12:05:45 PM] Triggering water reminder overlay...
+[Overlay Action] drank: 60
+[01:05:50 PM] Triggering water reminder overlay...
+[Overlay Action] drank: 120
+[03:06:00 PM] Triggering water reminder overlay...
+[Overlay Action] drank: 60
+[04:07:00 PM] Triggering water reminder overlay...
+[Overlay Action] snooze: 10
+[04:19:20 PM] Triggering water reminder overlay...
+[Overlay Action] drank: 60
+[05:53:20 PM] Triggering water reminder overlay...
+[Overlay Action] drank: 60
+💧 Water Reminder Daemon stopped.
+Traceback (most recent call last):
+  File "/home/naveen/Documents/Reminder/reminder.py", line 451, in <module>
+    main()
+  File "/home/naveen/Documents/Reminder/reminder.py", line 445, in main
+    run_daemon(test=False)
+  File "/home/naveen/Documents/Reminder/daemon.py", line 372, in run_daemon
+    daemon = ReminderDaemon(test_on_start=test)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/naveen/Documents/Reminder/daemon.py", line 67, in __init__
+    self.overlay = WaterReminderOverlay(on_action_callback=self.on_overlay_action)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/naveen/Documents/Reminder/overlay_gtk.py", line 276, in __init__
+    self.build_ui()
+  File "/home/naveen/Documents/Reminder/overlay_gtk.py", line 348, in build_ui
+    self.view_settings = self.create_settings_view()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/naveen/Documents/Reminder/overlay_gtk.py", line 587, in create_settings_view
+    self.btn_sound_toggle.connect("clicked", self.toggle_sound)
+                                             ^^^^^^^^^^^^^^^^^
+AttributeError: 'WaterReminderOverlay' object has no attribute 'toggle_sound'

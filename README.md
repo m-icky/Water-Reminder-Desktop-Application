@@ -397,8 +397,12 @@ All persistent settings, today's hydration metrics, and history are saved in `co
 ```
 
 - **Daily Auto-Reset**: At midnight (`00:00`), `glasses_today` automatically resets to `0`, and the previous day's count is archived into `daily_history`.
-- **Sound Toggle**: Toggle `sound_enabled` between `true` and `false` to turn audio on or off.
-- **Custom Audio**: Replace `reminder.wav` with any `.wav` audio file of your choice.
+- **⚙️ Gear Icon & Settings**: Click the `⚙️` Gear button at the top-right of the reminder speech bubble (or click `⚙️ Settings & Audio` in the footer) to open settings directly.
+- **🎵 Custom Audio Selection**:
+  - Choose between built-in sounds (`🔔 Default Alert`, `💧 Water Drop`, `🎵 Gentle Chime`) or custom files from the dropdown list.
+  - Click **▶ Play / ■ Stop** to preview any sound before selecting it.
+  - Click **📁 Add Audio File...** to select any `.wav`, `.mp3`, `.ogg`, or `.flac` audio file from your computer—it is automatically imported and set as your active reminder alert!
+- **Sound Toggle**: Toggle `sound_enabled` between `true` and `false` (or click `🔊 Sound: ON / OFF` in Settings) to enable or disable audio.
 
 ---
 
