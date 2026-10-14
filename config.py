@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import time
 
@@ -19,6 +20,7 @@ LOCK_FILE = os.path.join(BASE_DIR, "reminder.lock")
 DEFAULT_CONFIG = {
     "interval_minutes": 60,
     "snooze_minutes": 10,
+    "startup_delay_minutes": 30,
     "sound_enabled": True,
     "audio_file": "reminder.wav",
     "active_character": "default",
@@ -261,3 +263,48 @@ def delete_custom_character(character_id):
         save_config(config)
     return True
 
+def get_system_uptime_seconds():
+    """
+    Returns system uptime in seconds since boot, or None if unavailable.
+    Supports Linux (/proc/uptime), Windows (GetTickCount64), macOS (sysctl), and psutil.
+    """
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/uptime", "r") as f:
+                return float(f.read().split()[0])
+        except Exception:
+            pass
+    elif sys.platform == "win32":
+        try:
+            import ctypes
+            return ctypes.windll.kernel32.GetTickCount64() / 1000.0
+        except Exception:
+            pass
+    elif sys.platform == "darwin":
+        try:
+            import subprocess
+            import re
+            out = subprocess.check_output(["sysctl", "-n", "kern.boottime"]).decode("utf-8")
+            m = re.search(r"sec\s*=\s*(\d+)", out)
+            if m:
+                boot_sec = int(m.group(1))
+                return max(0.0, time.time() - boot_sec)
+        except Exception:
+            pass
+    try:
+        import psutil
+        return max(0.0, time.time() - psutil.boot_time())
+    except Exception:
+        pass
+    return None
+
+def get_startup_delay(config=None):
+    if config is None:
+        config = load_config()
+    return config.get("startup_delay_minutes", 30)
+
+def set_startup_delay(minutes):
+    config = load_config()
+    config["startup_delay_minutes"] = max(0, int(minutes))
+    save_config(config)
+    return config["startup_delay_minutes"]

@@ -1,13 +1,14 @@
 {
   "interval_minutes": 45,
   "snooze_minutes": 10,
+  "startup_delay_minutes": 30,
   "sound_enabled": true,
   "audio_file": "reminder.wav",
   "active_character": "default",
-  "next_reminder_time": 1791962724,
-  "last_reminder_time": 1791960024,
-  "last_drank_time": 1791959255,
-  "glasses_today": 3,
+  "next_reminder_time": 1791978390,
+  "last_reminder_time": 1791974783,
+  "last_drank_time": 1791974790,
+  "glasses_today": 8,
   "today_date": "2026-10-14",
   "daily_history": {
     "2026-10-11": 7,

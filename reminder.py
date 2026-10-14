@@ -149,8 +149,12 @@ def cmd_status():
         engine = sock_resp.get("engine", "default").upper()
         print(f"  ● Status:         RUNNING (PID: {pid}, Engine: {engine})")
         print(f"  ● Today's Date:   {today_str} (Resets daily at 00:00)")
-        print(f"  ● Glasses Today:  {sock_resp.get('glasses_today', 0)} 🥛")
         print(f"  ● Interval:       Every {sock_resp.get('interval_minutes')} minutes")
+        startup_delay = sock_resp.get("startup_delay_minutes", cfg.get("startup_delay_minutes", 30))
+        if startup_delay > 0:
+            print(f"  ● Startup Delay:  {startup_delay} minutes after system turn-on ⏱️")
+        else:
+            print(f"  ● Startup Delay:  Disabled (starts immediately on boot) ⏱️")
         print(f"  ● Next Reminder:  In {rem_mins:.1f} minutes ({rem_secs}s)")
         print(f"  ● Screen State:   {'Locked (Waiting)' if locked else 'Active / Unlocked'}")
         print(f"  ● Sound Effects:  {'Enabled 🔊' if sock_resp.get('sound_enabled') else 'Disabled 🔇'}")
@@ -163,6 +167,11 @@ def cmd_status():
         print(f"  ● Today's Date:   {today_str} (Resets daily at 00:00)")
         print(f"  ● Glasses Today:  {cfg.get('glasses_today', 0)} 🥛")
         print(f"  ● Interval:       Configured to {cfg.get('interval_minutes', 60)} minutes")
+        startup_delay = cfg.get("startup_delay_minutes", 30)
+        if startup_delay > 0:
+            print(f"  ● Startup Delay:  {startup_delay} minutes after system turn-on ⏱️")
+        else:
+            print(f"  ● Startup Delay:  Disabled (starts immediately on boot) ⏱️")
         print(f"  ● Sound Effects:  {'Enabled 🔊' if cfg.get('sound_enabled', True) else 'Disabled 🔇'}")
         
     char_meta = get_character_metadata(config=cfg)
@@ -310,6 +319,26 @@ def cmd_interval(mins):
     
     resp = send_socket_command(f"set_interval {mins}")
     print(f"✅ Reminder interval set to every {mins} minutes.")
+
+def cmd_startup_delay(mins):
+    try:
+        mins = int(mins)
+        if mins < 0:
+            print("Startup delay cannot be negative.")
+            return
+    except ValueError:
+        print("Invalid number of minutes.")
+        return
+        
+    cfg = load_config()
+    cfg["startup_delay_minutes"] = mins
+    save_config(cfg)
+    
+    send_socket_command(f"set_startup_delay {mins}")
+    if mins == 0:
+        print("✅ Startup delay disabled (reminders will start immediately on system boot).")
+    else:
+        print(f"✅ Startup delay set to {mins} minutes after system turn-on.")
 
 def cmd_autostart(action):
     if IS_WINDOWS:
@@ -515,6 +544,7 @@ Commands:
   status                        Check status, schedule, active character, and glasses
   test                          Immediately show the character reminder on screen
   interval <minutes>            Set reminder interval (e.g. 60 for 1 hour, 30 for 30 min)
+  startup-delay <minutes>       Set delay after system turn-on before 1st reminder (e.g. 30, 0 to disable)
   reset-count                   Reset today's water glasses count back to 0
   character list                List all available characters
   character set <id>            Switch active character
@@ -558,6 +588,13 @@ def main():
             cmd_interval(sys.argv[2])
         else:
             print("Please specify minutes: e.g. python reminder.py interval 60")
+    elif cmd in ("startup-delay", "startup_delay", "delay"):
+        if len(sys.argv) > 2:
+            cmd_startup_delay(sys.argv[2])
+        else:
+            cfg = load_config()
+            cur = cfg.get("startup_delay_minutes", 30)
+            print(f"Current startup delay: {cur} minutes. To change: python reminder.py startup-delay <minutes>")
     elif cmd == "autostart":
         action = sys.argv[2].lower() if len(sys.argv) > 2 else "enable"
         cmd_autostart(action)

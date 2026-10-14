@@ -119,7 +119,7 @@ if QT_AVAILABLE:
             h = self.height()
             bubble_w = max(10, w - self.tail_w)
             bubble_h = h
-            tail_y = bubble_h * 0.42
+            tail_y = min(max(30, bubble_h * 0.42), max(30, bubble_h - self.tail_h - 18))
 
             path = QPainterPath()
             r = self.radius
@@ -153,6 +153,21 @@ if QT_AVAILABLE:
             painter.setPen(pen)
 
             painter.drawPath(path)
+
+
+    class DynamicStackedWidget(QStackedWidget):
+        """Stacked widget that dynamically resizes to fit only the current visible widget."""
+        def sizeHint(self):
+            cur = self.currentWidget()
+            if cur:
+                return cur.sizeHint()
+            return super().sizeHint()
+
+        def minimumSizeHint(self):
+            cur = self.currentWidget()
+            if cur:
+                return cur.minimumSizeHint()
+            return super().minimumSizeHint()
 
 
     class QtWaterReminderOverlay(QWidget):
@@ -265,7 +280,8 @@ if QT_AVAILABLE:
             bubble_inner.setSpacing(8)
 
             # Stack for prompt, drank selection, settings, and feedback
-            self.stack = QStackedWidget()
+            self.stack = DynamicStackedWidget()
+            self.stack.currentChanged.connect(lambda idx: (self.stack.updateGeometry(), self.bubble.updateGeometry(), self.adjustSize()))
 
             self.view_prompt = self.create_prompt_view()
             self.stack.addWidget(self.view_prompt)
@@ -475,6 +491,19 @@ if QT_AVAILABLE:
                 btn.clicked.connect(lambda checked, m=mins: self.set_default_interval(m))
                 row.addWidget(btn)
             layout.addLayout(row)
+
+            # Row: Startup Delay (after system boot)
+            lbl_boot = QLabel("⏱️ Start After System Boot:")
+            lbl_boot.setStyleSheet("font-size: 11px; font-weight: 600; color: #455a64; margin-top: 4px;")
+            layout.addWidget(lbl_boot)
+
+            boot_row = QHBoxLayout()
+            for bmins, blabel in [(0, "0m (Off)"), (15, "15m"), (30, "30m"), (45, "45m"), (60, "60m")]:
+                btn = QPushButton(blabel)
+                btn.setStyleSheet(pill_style)
+                btn.clicked.connect(lambda checked, m=bmins: self.set_startup_delay_duration(m))
+                boot_row.addWidget(btn)
+            layout.addLayout(boot_row)
 
             # Audio customization section
             lbl_snd = QLabel("🔔 Reminder Alert Sound:")
@@ -832,6 +861,18 @@ if QT_AVAILABLE:
             self.feedback_sub.setText(f"Default reminder interval set to {minutes}m.")
             self.stack.setCurrentWidget(self.view_feedback)
             self.auto_hide_timer.start(700)
+
+        def set_startup_delay_duration(self, minutes):
+            self.config = load_config()
+            self.config["startup_delay_minutes"] = minutes
+            save_config(self.config)
+            self.feedback_title.setText("⚙️ Setting Updated!")
+            if minutes == 0:
+                self.feedback_sub.setText("Startup delay turned off (starts immediately on boot).")
+            else:
+                self.feedback_sub.setText(f"First reminder will start {minutes}m after system turn-on.")
+            self.stack.setCurrentWidget(self.view_feedback)
+            self.auto_hide_timer.start(1200)
 
         def open_settings_view(self):
             self.config = load_config()

@@ -367,6 +367,7 @@ Whenever the reminder character appears on screen:
 | **Stop** | `./reminder.sh stop` | `reminder.bat stop` | Stops the running daemon and releases ports/sockets. |
 | **Restart** | `./reminder.sh restart` | `reminder.bat restart` | Restarts the daemon service. |
 | **Set Interval** | `./reminder.sh interval <mins>` | `reminder.bat interval <mins>` | Changes reminder interval (e.g., `interval 30` or `interval 60`). |
+| **Set Startup Delay** | `./reminder.sh startup-delay <mins>` | `reminder.bat startup-delay <mins>` | Configures delay after system turn-on before 1st reminder appears (default: 30 mins). Set `0` to start immediately. |
 | **Reset Counter** | `./reminder.sh reset-count` | `reminder.bat reset-count` | Manually resets today's water glasses counter back to 0. |
 | **Enable Autostart**| `./reminder.sh autostart enable` | `reminder.bat autostart enable`| Registers the app to start automatically on system boot or user logon. |
 | **Disable Autostart**| `./reminder.sh autostart disable`| `reminder.bat autostart disable`| Removes system boot / login startup registration. |
@@ -383,7 +384,9 @@ All persistent settings, today's hydration metrics, and history are saved in `co
 {
   "interval_minutes": 60,
   "snooze_minutes": 10,
+  "startup_delay_minutes": 30,
   "sound_enabled": true,
+  "active_character": "default",
   "next_reminder_time": 1791868385,
   "last_reminder_time": 1791864768,
   "last_drank_time": 1791864785,
@@ -398,6 +401,11 @@ All persistent settings, today's hydration metrics, and history are saved in `co
 
 - **Daily Auto-Reset**: At midnight (`00:00`), `glasses_today` automatically resets to `0`, and the previous day's count is archived into `daily_history`.
 - **⚙️ Gear Icon & Settings**: Click the `⚙️` Gear button at the top-right of the reminder speech bubble (or click `⚙️ Settings & Audio` in the footer) to open settings directly.
+- **⏱️ System Boot / Turn-On Delay**:
+  - Configure how long after your computer powers on or boots before the first reminder appears (`30m` by default).
+  - Quick pills: `0m (Off)`, `15m`, `30m`, `45m`, `60m`.
+  - Ensures you can settle into your workflow or finish morning boot without immediate popup interruptions.
+  - Can also be customized via CLI: `python3 reminder.py startup-delay <minutes>`.
 - **👤 Custom Character Video Upload**:
   - **Upload Your Own Video**: In Settings, click **`🎬 Upload Video Character...`** and select any video (`.mp4`, `.webm`, `.mov`, `.mkv`, `.avi`, `.gif`).
   - **Automatic Transparent Background Processing**: Automatically converts the video into transparent background frames (`assets/characters/<name>/frames/`) with soft edge anti-aliasing and color despill.

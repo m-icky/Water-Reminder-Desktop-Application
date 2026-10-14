@@ -10,7 +10,8 @@ if sys.platform.startswith("linux") and os.environ.get("DISPLAY"):
     os.environ["GDK_BACKEND"] = "x11"
 
 from config import (
-    load_config, save_config, reset_glasses_count, PID_FILE, SOCKET_FILE, PORT_FILE, LOCK_FILE
+    load_config, save_config, reset_glasses_count, get_system_uptime_seconds,
+    PID_FILE, SOCKET_FILE, PORT_FILE, LOCK_FILE
 )
 from overlay import WaterReminderOverlay, ENGINE
 
@@ -76,22 +77,26 @@ class ReminderDaemon:
         # Initialize schedule
         now = int(time.time())
         interval_secs = self.config.get("interval_minutes", 60) * 60
+        startup_delay_mins = self.config.get("startup_delay_minutes", 30)
+        startup_delay_secs = max(0, startup_delay_mins * 60)
         
         next_time = self.config.get("next_reminder_time", 0)
-        last_drank = self.config.get("last_drank_time", 0)
-        last_remind = self.config.get("last_reminder_time", 0)
+        uptime = get_system_uptime_seconds()
         
         if self.test_on_start:
             self.config["next_reminder_time"] = now
+        elif startup_delay_mins > 0 and uptime is not None and uptime < startup_delay_secs:
+            # System was recently booted/turned on. Delay first reminder until startup_delay_mins after boot.
+            delay_remaining = max(10, int(startup_delay_secs - uptime))
+            if next_time > now:
+                self.config["next_reminder_time"] = max(next_time, now + delay_remaining)
+            else:
+                self.config["next_reminder_time"] = now + delay_remaining
+            print(f"[Schedule] System turned on {int(uptime)}s ago. First reminder scheduled in {delay_remaining // 60}m {delay_remaining % 60}s ({startup_delay_mins}m after boot).")
         elif next_time > now:
             pass
         else:
-            # If system just turned on and it has been more than 30 mins since last drink/reminder
-            ref_time = max(last_drank, last_remind)
-            if ref_time > 0 and (now - ref_time) >= (30 * 60):
-                self.config["next_reminder_time"] = now + 10
-            else:
-                self.config["next_reminder_time"] = now + interval_secs
+            self.config["next_reminder_time"] = now + interval_secs
                 
         save_config(self.config)
 
@@ -205,6 +210,7 @@ class ReminderDaemon:
                     "pid": os.getpid(),
                     "engine": self.engine,
                     "interval_minutes": cfg.get("interval_minutes", 60),
+                    "startup_delay_minutes": cfg.get("startup_delay_minutes", 30),
                     "sound_enabled": cfg.get("sound_enabled", True),
                     "glasses_today": cfg.get("glasses_today", 0),
                     "active_character": char_meta.get("id", "default"),
@@ -221,6 +227,22 @@ class ReminderDaemon:
                     cfg["next_reminder_time"] = int(time.time()) + (mins * 60)
                     save_config(cfg)
                     response["message"] = f"Interval updated to {mins} mins"
+                except Exception as e:
+                    response = {"status": "error", "message": str(e)}
+            elif data.startswith("set_startup_delay ") or data.startswith("set_delay "):
+                try:
+                    mins = int(data.split()[1])
+                    if mins < 0:
+                        mins = 0
+                    cfg = load_config()
+                    cfg["startup_delay_minutes"] = mins
+                    now = int(time.time())
+                    uptime = get_system_uptime_seconds()
+                    if mins > 0 and uptime is not None and uptime < (mins * 60):
+                        rem = max(10, int(mins * 60 - uptime))
+                        cfg["next_reminder_time"] = now + rem
+                    save_config(cfg)
+                    response["message"] = f"Startup delay set to {mins} mins after boot"
                 except Exception as e:
                     response = {"status": "error", "message": str(e)}
             elif data.startswith("set_character ") or data.startswith("set_char "):

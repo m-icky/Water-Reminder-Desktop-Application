@@ -201,7 +201,7 @@ class SpeechBubble(Gtk.Box):
         bubble_w = max(10, width - tail_w)
         bubble_h = height
         radius = 16
-        tail_y = bubble_h * 0.42
+        tail_y = min(max(30, bubble_h * 0.42), max(30, bubble_h - tail_h - 18))
         
         # Clear
         cr.save()
@@ -379,6 +379,19 @@ class WaterReminderOverlay(Gtk.Window):
         self.stack = Gtk.Stack()
         self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
         self.stack.set_transition_duration(250)
+        self.stack.set_homogeneous(False)
+        if hasattr(self.stack, "set_vhomogeneous"):
+            self.stack.set_vhomogeneous(False)
+        if hasattr(self.stack, "set_hhomogeneous"):
+            self.stack.set_hhomogeneous(False)
+
+        def on_stack_child_changed(stack, param):
+            self.queue_resize()
+            if hasattr(self, "bubble") and self.bubble:
+                self.bubble.queue_draw()
+            GLib.idle_add(self.reposition_bottom_right)
+            GLib.timeout_add(260, self.reposition_bottom_right)
+        self.stack.connect("notify::visible-child", on_stack_child_changed)
         
         # View 1: Main Reminder Prompt
         self.view_prompt = self.create_prompt_view()
@@ -694,6 +707,20 @@ class WaterReminderOverlay(Gtk.Window):
             btn.connect("clicked", lambda b, m=smins: self.set_snooze_duration(m))
             snooze_box.pack_start(btn, True, True, 0)
         box.pack_start(snooze_box, False, False, 1)
+        
+        # Row 4: Startup Delay (after system boot)
+        lbl_boot = Gtk.Label(label="⏱️ Start After System Boot:")
+        lbl_boot.set_xalign(0)
+        lbl_boot.get_style_context().add_class("subtitle-label")
+        box.pack_start(lbl_boot, False, False, 0)
+        
+        boot_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
+        for bmins, blabel in [(0, "0m (Off)"), (15, "15m"), (30, "30m"), (45, "45m"), (60, "60m")]:
+            btn = Gtk.Button(label=blabel)
+            btn.get_style_context().add_class("btn-pill")
+            btn.connect("clicked", lambda b, m=bmins: self.set_startup_delay_duration(m))
+            boot_box.pack_start(btn, True, True, 0)
+        box.pack_start(boot_box, False, False, 1)
         
         # Back Button
         btn_back = Gtk.Button(label="← Back to Reminder")
@@ -1051,6 +1078,18 @@ class WaterReminderOverlay(Gtk.Window):
         self.feedback_sub.set_text(f"Default reminder interval set to {minutes}m.")
         self.stack.set_visible_child_name("feedback")
         self.schedule_auto_hide(1000)
+
+    def set_startup_delay_duration(self, minutes):
+        self.config = load_config()
+        self.config["startup_delay_minutes"] = minutes
+        save_config(self.config)
+        self.feedback_title.set_text("⚙️ Setting Updated!")
+        if minutes == 0:
+            self.feedback_sub.set_text("Startup delay turned off (starts immediately on boot).")
+        else:
+            self.feedback_sub.set_text(f"First reminder will start {minutes}m after system turn-on.")
+        self.stack.set_visible_child_name("feedback")
+        self.schedule_auto_hide(1200)
 
     def create_feedback_view(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
