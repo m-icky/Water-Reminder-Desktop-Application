@@ -11,7 +11,8 @@ QT_LIB = None
 try:
     from PyQt6.QtWidgets import (
         QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-        QStackedWidget, QSpinBox, QComboBox, QFileDialog, QGraphicsDropShadowEffect
+        QStackedWidget, QSpinBox, QComboBox, QFileDialog, QGraphicsDropShadowEffect,
+        QDialog, QLineEdit, QMessageBox
     )
     from PyQt6.QtCore import Qt, QTimer, QPoint, QRectF
     from PyQt6.QtGui import (
@@ -37,7 +38,8 @@ except ImportError:
     try:
         from PySide6.QtWidgets import (
             QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-            QStackedWidget, QSpinBox, QComboBox, QFileDialog, QGraphicsDropShadowEffect
+            QStackedWidget, QSpinBox, QComboBox, QFileDialog, QGraphicsDropShadowEffect,
+            QDialog, QLineEdit, QMessageBox
         )
         from PySide6.QtCore import Qt, QTimer, QPoint, QRectF
         from PySide6.QtGui import (
@@ -62,7 +64,8 @@ except ImportError:
         try:
             from PyQt5.QtWidgets import (
                 QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-                QStackedWidget, QSpinBox, QComboBox, QFileDialog, QGraphicsDropShadowEffect
+                QStackedWidget, QSpinBox, QComboBox, QFileDialog, QGraphicsDropShadowEffect,
+                QDialog, QLineEdit, QMessageBox
             )
             from PyQt5.QtCore import Qt, QTimer, QPoint, QRectF
             from PyQt5.QtGui import (
@@ -87,11 +90,15 @@ except ImportError:
             QT_AVAILABLE = False
             QT_LIB = None
 
+import threading
 from config import (
-    FRAMES_DIR, SMOKE_DIR, SOUNDS_DIR, AUDIO_FILE, load_config, save_config,
-    record_glass_drank, get_audio_file_path, list_available_sounds
+    FRAMES_DIR, SMOKE_DIR, SOUNDS_DIR, AUDIO_FILE, CHARACTERS_DIR, load_config, save_config,
+    record_glass_drank, get_audio_file_path, list_available_sounds,
+    list_available_characters, get_active_character_id, get_character_frames_dir,
+    get_character_metadata, set_active_character, delete_custom_character
 )
 from audio import SoundPlayer
+from video_processor import process_video_character
 
 
 if QT_AVAILABLE:
@@ -166,6 +173,15 @@ if QT_AVAILABLE:
             self.setWindowFlags(WINDOW_FLAGS)
             self.setAttribute(WA_TRANSLUCENT)
 
+            # Character & UI state
+            self.combo_char = None
+            self.btn_del_char = None
+            self.btn_add_char = None
+            self.lbl_char_progress = None
+            self.char_meta = None
+            self.frame_interval_ms = 50
+            self.loop_start = 0
+
             # Frames & Animation state
             self.char_frames = []
             self.smoke_frames = []
@@ -187,24 +203,53 @@ if QT_AVAILABLE:
             self.load_frames()
             self.build_ui()
 
-        def load_frames(self):
-            # Load character frames
-            if os.path.exists(FRAMES_DIR):
-                files = sorted([f for f in os.listdir(FRAMES_DIR) if f.startswith("f_") and f.endswith(".png")])
+        def load_frames(self, character_id=None):
+            self.char_frames = []
+            self.config = load_config()
+            self.char_meta = get_character_metadata(character_id, self.config)
+            self.frame_interval_ms = self.char_meta.get("frame_interval_ms", 50)
+            self.loop_start = self.char_meta.get("loop_start", 0)
+
+            frames_dir = get_character_frames_dir(character_id, self.config)
+            if os.path.exists(frames_dir):
+                files = sorted([f for f in os.listdir(frames_dir) if f.startswith("f_") and f.endswith(".png")])
                 for f in files:
-                    p = os.path.join(FRAMES_DIR, f)
+                    p = os.path.join(frames_dir, f)
                     pix = QPixmap(p)
                     if not pix.isNull():
                         self.char_frames.append(pix)
 
+            # Fallback to default Hydro Buddy frames if empty
+            if not self.char_frames and frames_dir != FRAMES_DIR and os.path.exists(FRAMES_DIR):
+                self.char_meta = get_character_metadata("default", self.config)
+                self.loop_start = 150
+                self.frame_interval_ms = 50
+                files = sorted([f for f in os.listdir(FRAMES_DIR) if f.startswith("f_") and f.endswith(".png")])
+                for f in files:
+                    pix = QPixmap(os.path.join(FRAMES_DIR, f))
+                    if not pix.isNull():
+                        self.char_frames.append(pix)
+
             # Load closing smoke frames
-            if os.path.exists(SMOKE_DIR):
+            if not self.smoke_frames and os.path.exists(SMOKE_DIR):
                 smoke_files = sorted([f for f in os.listdir(SMOKE_DIR) if f.startswith("close_anim_") and f.endswith(".png")])
                 for f in smoke_files:
                     p = os.path.join(SMOKE_DIR, f)
                     pix = QPixmap(p)
                     if not pix.isNull():
                         self.smoke_frames.append(pix)
+
+            if hasattr(self, "char_label") and self.char_frames:
+                self.char_label.setPixmap(self.char_frames[0])
+
+        def reload_character(self, character_id=None):
+            self.load_frames(character_id)
+            self.current_frame_idx = 0
+            if self.char_frames and hasattr(self, "char_label"):
+                self.char_label.setPixmap(self.char_frames[0])
+            if self.anim_timer.isActive():
+                self.anim_timer.stop()
+                self.anim_timer.start(self.frame_interval_ms)
 
         def build_ui(self):
             main_layout = QHBoxLayout(self)
@@ -486,8 +531,58 @@ if QT_AVAILABLE:
             btn_row.addWidget(self.btn_sound, 1)
             layout.addLayout(btn_row)
 
-            # Populate combo
+            # Character customization section
+            lbl_char = QLabel("👤 Animated Character:")
+            lbl_char.setStyleSheet("font-size: 11px; font-weight: 600; color: #455a64; margin-top: 4px;")
+            layout.addWidget(lbl_char)
+
+            char_row = QHBoxLayout()
+            self.combo_char = QComboBox()
+            self.combo_char.setCursor(CURSOR_POINTER)
+            self.combo_char.setStyleSheet(
+                "QComboBox { background: white; color: #0b4f9c; font-size: 11px; font-weight: 600; "
+                "border: 1px solid rgba(0, 122, 242, 0.35); border-radius: 8px; padding: 4px 8px; } "
+                "QComboBox:hover { border-color: #007af2; } "
+                "QComboBox QAbstractItemView { background: white; color: #1e293b; "
+                "selection-background-color: #e1f5fe; selection-color: #0b4f9c; }"
+            )
+            self.combo_char.currentIndexChanged.connect(self.on_qt_char_combo_changed)
+            char_row.addWidget(self.combo_char, 1)
+
+            self.btn_del_char = QPushButton("🗑️")
+            self.btn_del_char.setToolTip("Delete selected custom character")
+            self.btn_del_char.setCursor(CURSOR_POINTER)
+            self.btn_del_char.setStyleSheet(
+                "QPushButton { background: white; color: #d32f2f; font-size: 11px; font-weight: 600; "
+                "border: 1px solid rgba(211, 47, 47, 0.3); border-radius: 8px; padding: 4px 8px; } "
+                "QPushButton:hover { background: #ffebee; }"
+            )
+            self.btn_del_char.clicked.connect(self.on_click_delete_character)
+            char_row.addWidget(self.btn_del_char)
+            layout.addLayout(char_row)
+
+            # Upload Character Video Button
+            char_act_row = QHBoxLayout()
+            self.btn_add_char = QPushButton("🎬 Upload Video Character...")
+            self.btn_add_char.setCursor(CURSOR_POINTER)
+            self.btn_add_char.setStyleSheet(
+                "QPushButton { background: white; color: #0277bd; font-size: 11px; font-weight: 600; "
+                "border-radius: 8px; padding: 5px 8px; border: 1px dashed rgba(2, 119, 189, 0.5); } "
+                "QPushButton:hover { background: #f0f9ff; border-style: solid; }"
+            )
+            self.btn_add_char.clicked.connect(self.on_click_add_custom_character)
+            char_act_row.addWidget(self.btn_add_char)
+            layout.addLayout(char_act_row)
+
+            self.lbl_char_progress = QLabel("")
+            self.lbl_char_progress.setWordWrap(True)
+            self.lbl_char_progress.setStyleSheet("font-size: 10px; color: #0277bd; font-weight: 600;")
+            self.lbl_char_progress.hide()
+            layout.addWidget(self.lbl_char_progress)
+
+            # Populate combos
             self.populate_sound_options()
+            self.populate_character_options()
 
             btn_back = QPushButton("← Back")
             btn_back.setStyleSheet("background: transparent; color: #78909c; font-size: 11px; font-weight: 600; border: none;")
@@ -495,6 +590,172 @@ if QT_AVAILABLE:
             layout.addWidget(btn_back, 0, ALIGN_LEFT)
 
             return w
+
+        def open_settings_view(self):
+            self.config = load_config()
+            sound_on = self.config.get("sound_enabled", True)
+            if hasattr(self, "btn_sound") and self.btn_sound:
+                self.btn_sound.setText(f"🔊 Sound: {'ON' if sound_on else 'OFF'}")
+            self.populate_sound_options()
+            self.populate_character_options()
+            self.stack.setCurrentWidget(self.view_settings)
+
+        def populate_character_options(self):
+            if not self.combo_char:
+                return
+            self.combo_char.blockSignals(True)
+            self.combo_char.clear()
+
+            chars = list_available_characters(self.config)
+            cur_char = get_active_character_id(self.config)
+            active_idx = 0
+            for idx, c in enumerate(chars):
+                self.combo_char.addItem(c["name"], c["id"])
+                if c["id"] == cur_char:
+                    active_idx = idx
+
+            self.combo_char.setCurrentIndex(active_idx)
+            self.combo_char.blockSignals(False)
+            if hasattr(self, "btn_del_char") and self.btn_del_char:
+                self.btn_del_char.setEnabled(cur_char != "default")
+
+        def on_qt_char_combo_changed(self, index):
+            if index < 0 or not self.combo_char:
+                return
+            char_id = self.combo_char.itemData(index)
+            if not char_id:
+                return
+            set_active_character(char_id)
+            self.config = load_config()
+            if hasattr(self, "btn_del_char") and self.btn_del_char:
+                self.btn_del_char.setEnabled(char_id != "default")
+            self.reload_character(char_id)
+
+        def on_click_delete_character(self):
+            char_id = get_active_character_id(self.config)
+            if char_id == "default":
+                return
+            ret = QMessageBox.question(
+                self, "Delete Character",
+                "Are you sure you want to delete this custom character?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if ret == QMessageBox.StandardButton.Yes:
+                delete_custom_character(char_id)
+                self.config = load_config()
+                self.populate_character_options()
+                self.reload_character("default")
+                self.feedback_title.setText("🗑️ Character Deleted")
+                self.feedback_sub.setText("Switched back to Hydro Buddy.")
+                self.stack.setCurrentWidget(self.view_feedback)
+                self.auto_hide_timer.start(1000)
+
+        def on_click_add_custom_character(self):
+            dialog = QFileDialog(self, "Select Character Video", os.path.expanduser("~"))
+            dialog.setNameFilter("Video / Animation (*.mp4 *.webm *.mov *.mkv *.avi *.gif);;All Files (*)")
+            if dialog.exec():
+                selected = dialog.selectedFiles()
+                if not selected:
+                    return
+                video_path = selected[0]
+                if not os.path.exists(video_path):
+                    return
+
+                # Options dialog
+                opt_dlg = QDialog(self)
+                opt_dlg.setWindowTitle("Configure Character")
+                opt_layout = QVBoxLayout(opt_dlg)
+
+                lbl_n = QLabel("Character Name:")
+                opt_layout.addWidget(lbl_n)
+                base_name = os.path.splitext(os.path.basename(video_path))[0].replace("_", " ").title()
+                line_name = QLineEdit(base_name)
+                opt_layout.addWidget(line_name)
+
+                lbl_b = QLabel("Background Removal Mode:")
+                opt_layout.addWidget(lbl_b)
+                combo_bg = QComboBox()
+                combo_bg.addItem("✨ Auto-Detect Background (Smart)", "auto")
+                combo_bg.addItem("⚪ White / Light Background", "white")
+                combo_bg.addItem("🟢 Green Screen (Chroma Key)", "green")
+                combo_bg.addItem("🔵 Blue Screen", "blue")
+                combo_bg.addItem("⚫ Black / Dark Background", "black")
+                combo_bg.addItem("🎞️ Video Has Transparency (Alpha)", "alpha")
+                opt_layout.addWidget(combo_bg)
+
+                lbl_f = QLabel("Animation Smoothness (FPS):")
+                opt_layout.addWidget(lbl_f)
+                combo_fps = QComboBox()
+                combo_fps.addItem("20 FPS (Recommended - Smooth & Light)", "20")
+                combo_fps.addItem("24 FPS (Cinematic 24fps)", "24")
+                combo_fps.addItem("15 FPS (Resource Saver)", "15")
+                opt_layout.addWidget(combo_fps)
+
+                btn_row = QHBoxLayout()
+                btn_ok = QPushButton("🚀 Convert & Apply")
+                btn_ok.clicked.connect(opt_dlg.accept)
+                btn_cancel = QPushButton("Cancel")
+                btn_cancel.clicked.connect(opt_dlg.reject)
+                btn_row.addWidget(btn_cancel)
+                btn_row.addWidget(btn_ok)
+                opt_layout.addLayout(btn_row)
+
+                if opt_dlg.exec():
+                    char_name = line_name.text().strip() or base_name
+                    bg_mode = combo_bg.currentData() or "auto"
+                    fps = int(combo_fps.currentData() or "20")
+
+                    if self.btn_add_char:
+                        self.btn_add_char.setEnabled(False)
+                    if self.lbl_char_progress:
+                        self.lbl_char_progress.show()
+                        self.lbl_char_progress.setText("⏳ Preparing video extraction...")
+
+                    def worker():
+                        try:
+                            def on_progress(pct, msg):
+                                QTimer.singleShot(0, lambda: self._update_qt_char_progress(pct, msg))
+
+                            meta = process_video_character(
+                                video_path=video_path,
+                                character_name=char_name,
+                                bg_mode=bg_mode,
+                                target_fps=fps,
+                                progress_callback=on_progress
+                            )
+                            QTimer.singleShot(0, lambda: self._on_qt_char_done(meta))
+                        except Exception as err:
+                            QTimer.singleShot(0, lambda: self._on_qt_char_error(str(err)))
+
+                    t = threading.Thread(target=worker, daemon=True)
+                    t.start()
+
+        def _update_qt_char_progress(self, pct, msg):
+            if hasattr(self, "lbl_char_progress") and self.lbl_char_progress:
+                self.lbl_char_progress.setText(f"⏳ {pct}%: {msg}")
+
+        def _on_qt_char_done(self, meta):
+            if hasattr(self, "btn_add_char") and self.btn_add_char:
+                self.btn_add_char.setEnabled(True)
+            set_active_character(meta["id"])
+            self.config = load_config()
+            self.populate_character_options()
+            self.reload_character(meta["id"])
+
+            if hasattr(self, "lbl_char_progress") and self.lbl_char_progress:
+                self.lbl_char_progress.setText(f"🎉 Ready! {meta['name']} ({meta['frame_count']} frames)")
+                QTimer.singleShot(4000, lambda: self.lbl_char_progress.hide())
+
+            self.feedback_title.setText("🎉 Character Ready!")
+            self.feedback_sub.setText(f"Active: {meta['name']}")
+            self.stack.setCurrentWidget(self.view_feedback)
+            self.auto_hide_timer.start(1200)
+
+        def _on_qt_char_error(self, err_msg):
+            if hasattr(self, "btn_add_char") and self.btn_add_char:
+                self.btn_add_char.setEnabled(True)
+            if hasattr(self, "lbl_char_progress") and self.lbl_char_progress:
+                self.lbl_char_progress.setText(f"❌ Error: {err_msg[:60]}")
 
         def create_feedback_view(self):
             w = QWidget()
@@ -720,7 +981,8 @@ if QT_AVAILABLE:
             self.reposition_bottom_right()
             QTimer.singleShot(50, self.reposition_bottom_right)
             QTimer.singleShot(150, self.reposition_bottom_right)
-            self.anim_timer.start(50)
+            interval = getattr(self, "frame_interval_ms", 50)
+            self.anim_timer.start(interval)
 
         def on_anim_tick(self):
             if not self.char_frames or self.is_closing:
@@ -728,7 +990,10 @@ if QT_AVAILABLE:
             total = len(self.char_frames)
             self.current_frame_idx += 1
             if self.current_frame_idx >= total:
-                self.current_frame_idx = min(150, total - 20)
+                loop_start = getattr(self, "loop_start", 0)
+                if loop_start >= total:
+                    loop_start = 0
+                self.current_frame_idx = loop_start
             self.char_label.setPixmap(self.char_frames[self.current_frame_idx])
 
         def hide_overlay(self, animated=True):

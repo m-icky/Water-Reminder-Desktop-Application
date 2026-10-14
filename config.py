@@ -10,6 +10,7 @@ SMOKE_DIR = os.path.join(ASSETS_DIR, "smoke")
 SOUNDS_DIR = os.path.join(ASSETS_DIR, "sounds")
 AUDIO_FILE = os.path.join(BASE_DIR, "reminder.wav")
 AUDIO_OGG = os.path.join(BASE_DIR, "reminder.ogg")
+CHARACTERS_DIR = os.path.join(ASSETS_DIR, "characters")
 PID_FILE = os.path.join(BASE_DIR, "reminder.pid")
 SOCKET_FILE = os.path.join(BASE_DIR, "reminder.sock")
 PORT_FILE = os.path.join(BASE_DIR, "reminder.port")
@@ -20,6 +21,7 @@ DEFAULT_CONFIG = {
     "snooze_minutes": 10,
     "sound_enabled": True,
     "audio_file": "reminder.wav",
+    "active_character": "default",
     "next_reminder_time": 0,
     "last_reminder_time": 0,
     "last_drank_time": 0,
@@ -140,3 +142,122 @@ def reset_glasses_count():
     config["glasses_today"] = 0
     save_config(config)
     return 0
+
+def list_available_characters(config=None):
+    """
+    List all available characters (default + custom video characters in assets/characters/).
+    """
+    characters = []
+
+    # 1. Default Hydro Buddy character
+    default_meta = {
+        "id": "default",
+        "name": "💧 Hydro Buddy (Default)",
+        "frames_dir": FRAMES_DIR,
+        "is_default": True,
+        "fps": 20,
+        "loop_start": 150,
+        "frame_count": 202
+    }
+    if os.path.exists(FRAMES_DIR):
+        f_count = len([f for f in os.listdir(FRAMES_DIR) if f.startswith("f_") and f.endswith(".png")])
+        if f_count > 0:
+            default_meta["frame_count"] = f_count
+    characters.append(default_meta)
+
+    # 2. Custom characters in assets/characters/
+    if os.path.exists(CHARACTERS_DIR):
+        for entry in sorted(os.listdir(CHARACTERS_DIR)):
+            c_dir = os.path.join(CHARACTERS_DIR, entry)
+            if not os.path.isdir(c_dir):
+                continue
+            frames_p = os.path.join(c_dir, "frames")
+            if not os.path.exists(frames_p):
+                continue
+            f_files = [f for f in os.listdir(frames_p) if f.startswith("f_") and f.endswith(".png")]
+            if not f_files:
+                continue
+
+            # Read metadata.json if present
+            meta_file = os.path.join(c_dir, "metadata.json")
+            meta = {}
+            if os.path.exists(meta_file):
+                try:
+                    with open(meta_file, "r") as mf:
+                        meta = json.load(mf)
+                except Exception:
+                    pass
+
+            c_name = meta.get("name") or entry.replace("_", " ").title()
+            char_info = {
+                "id": entry,
+                "name": f"✨ {c_name}",
+                "frames_dir": frames_p,
+                "is_default": False,
+                "fps": meta.get("fps", 20),
+                "loop_start": meta.get("loop_start", 0),
+                "frame_count": len(f_files),
+                "bg_mode": meta.get("bg_mode", "auto"),
+                "source_file": meta.get("source_file", "")
+            }
+            characters.append(char_info)
+
+    return characters
+
+def get_active_character_id(config=None):
+    if config is None:
+        config = load_config()
+    return config.get("active_character", "default")
+
+def get_character_frames_dir(character_id=None, config=None):
+    if character_id is None:
+        character_id = get_active_character_id(config)
+    if character_id == "default":
+        return FRAMES_DIR
+    
+    custom_dir = os.path.join(CHARACTERS_DIR, character_id, "frames")
+    if os.path.exists(custom_dir):
+        files = [f for f in os.listdir(custom_dir) if f.startswith("f_") and f.endswith(".png")]
+        if files:
+            return custom_dir
+
+    return FRAMES_DIR
+
+def get_character_metadata(character_id=None, config=None):
+    if character_id is None:
+        character_id = get_active_character_id(config)
+
+    chars = list_available_characters(config)
+    for c in chars:
+        if c["id"] == character_id:
+            return c
+    # Fallback to default
+    return chars[0] if chars else {
+        "id": "default",
+        "name": "💧 Hydro Buddy (Default)",
+        "frames_dir": FRAMES_DIR,
+        "is_default": True,
+        "fps": 20,
+        "loop_start": 150,
+        "frame_count": 202
+    }
+
+def set_active_character(character_id):
+    config = load_config()
+    config["active_character"] = character_id
+    save_config(config)
+    return config
+
+def delete_custom_character(character_id):
+    if not character_id or character_id == "default":
+        return False
+    char_dir = os.path.join(CHARACTERS_DIR, character_id)
+    if os.path.exists(char_dir):
+        import shutil
+        shutil.rmtree(char_dir, ignore_errors=True)
+    config = load_config()
+    if config.get("active_character") == character_id:
+        config["active_character"] = "default"
+        save_config(config)
+    return True
+

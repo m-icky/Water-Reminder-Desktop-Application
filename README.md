@@ -398,11 +398,45 @@ All persistent settings, today's hydration metrics, and history are saved in `co
 
 - **Daily Auto-Reset**: At midnight (`00:00`), `glasses_today` automatically resets to `0`, and the previous day's count is archived into `daily_history`.
 - **⚙️ Gear Icon & Settings**: Click the `⚙️` Gear button at the top-right of the reminder speech bubble (or click `⚙️ Settings & Audio` in the footer) to open settings directly.
+- **👤 Custom Character Video Upload**:
+  - **Upload Your Own Video**: In Settings, click **`🎬 Upload Video Character...`** and select any video (`.mp4`, `.webm`, `.mov`, `.mkv`, `.avi`, `.gif`).
+  - **Automatic Transparent Background Processing**: Automatically converts the video into transparent background frames (`assets/characters/<name>/frames/`) with soft edge anti-aliasing and color despill.
+  - **Supported Background Modes**:
+    - `✨ Auto-Detect Background`: Analyzes corner and border pixels to automatically detect and key out solid studio backgrounds.
+    - `⚪ White / Light Background`: Keys out bright studio/white backgrounds.
+    - `🟢 Green Screen (Chroma Key)`: Keys out green screen with despill color neutralization.
+    - `🔵 Blue Screen`: Keys out blue screen backgrounds.
+    - `⚫ Black / Dark Background`: Keys out dark backgrounds.
+    - `🎞️ Native Transparency (Alpha)`: Directly decodes transparent WebM, ProRes 4444, or GIF animations.
+  - **Smooth Playback**: Video is scaled and centered into the optimal `270x480` overlay format and smoothly looped.
+  - **Character Management**: Switch between the default Hydro Buddy and any custom characters using the dropdown, or delete custom characters with the `🗑️` button.
 - **🎵 Custom Audio Selection**:
   - Choose between built-in sounds (`🔔 Default Alert`, `💧 Water Drop`, `🎵 Gentle Chime`) or custom files from the dropdown list.
   - Click **▶ Play / ■ Stop** to preview any sound before selecting it.
   - Click **📁 Add Audio File...** to select any `.wav`, `.mp3`, `.ogg`, or `.flac` audio file from your computer—it is automatically imported and set as your active reminder alert!
 - **Sound Toggle**: Toggle `sound_enabled` between `true` and `false` (or click `🔊 Sound: ON / OFF` in Settings) to enable or disable audio.
+
+---
+
+## 🎬 CLI Character Management
+
+You can also manage and import character videos directly from the command line:
+
+```bash
+# List all installed characters
+python3 reminder.py character list
+
+# Upload a custom video and convert it to transparent animation frames
+python3 reminder.py character add my_character.mp4 --name "My Mascot" --mode auto --fps 20
+
+# Switch active character
+python3 reminder.py character set "My Mascot"
+# or switch back to default:
+python3 reminder.py character set default
+
+# Delete a custom character
+python3 reminder.py character delete my_mascot_12345
+```
 
 ---
 
@@ -418,12 +452,15 @@ Reminder/
 ├── overlay_gtk.py         # Native GTK3 floating transparent overlay for Ubuntu
 ├── overlay_qt.py          # Native PyQt6 floating transparent overlay for Windows
 ├── audio.py               # Cross-platform audio player (winsound / paplay / aplay)
+├── video_processor.py     # Video to transparent background frames converter & optimizer
 ├── config.py              # Configuration manager & daily intake tracker
 ├── config.json            # Persistent user settings and history
-├── requirements.txt       # Python dependencies (PyQt6 on Windows, Pillow)
+├── requirements.txt       # Python dependencies (Pillow, numpy, PyQt6 on Windows)
 ├── assets/
-│   ├── frames/            # 202 character animation frames (f_0001.png - f_0202.png)
-│   └── smoke/             # 10 cartoon smoke frames for smooth exit animation
+│   ├── frames/            # Default character animation frames (f_0001.png - f_0202.png)
+│   ├── characters/        # Custom user-uploaded character folders & metadata
+│   ├── smoke/             # 10 cartoon smoke frames for smooth exit animation
+│   └── sounds/            # Built-in and custom alert audio files
 ├── reminder.wav           # Reminder audio alert (WAV format)
 ├── reminder.ogg           # Reminder audio alert (OGG format)
 ├── reminder.mp4           # Reference reminder animation video

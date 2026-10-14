@@ -6,3 +6,5 @@ reminder.port
 reminder.lock
 reminder.log
 .DS_Store
+assets/characters/*
+!assets/characters/.gitkeep

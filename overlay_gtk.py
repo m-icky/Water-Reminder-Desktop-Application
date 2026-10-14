@@ -18,11 +18,15 @@ if sys.platform != "win32":
     except Exception:
         GTK_AVAILABLE = False
 
+import threading
 from config import (
-    FRAMES_DIR, SMOKE_DIR, SOUNDS_DIR, AUDIO_FILE, load_config, save_config,
-    record_glass_drank, get_audio_file_path, list_available_sounds
+    FRAMES_DIR, SMOKE_DIR, SOUNDS_DIR, AUDIO_FILE, CHARACTERS_DIR, load_config, save_config,
+    record_glass_drank, get_audio_file_path, list_available_sounds,
+    list_available_characters, get_active_character_id, get_character_frames_dir,
+    get_character_metadata, set_active_character, delete_custom_character
 )
 from audio import SoundPlayer
+from video_processor import process_video_character, detect_background_color
 
 CSS_STYLE = b"""
 window {
@@ -261,6 +265,14 @@ class WaterReminderOverlay(Gtk.Window):
         # Load CSS
         self.setup_css()
         
+        self.combo_character = None
+        self.btn_del_char = None
+        self.btn_add_character = None
+        self.lbl_char_progress = None
+        self.char_meta = None
+        self.frame_interval_ms = 50
+        self.loop_start = 0
+
         # Animation state
         self.frames = []
         self.smoke_frames = []
@@ -291,20 +303,40 @@ class WaterReminderOverlay(Gtk.Window):
         cr.set_operator(cairo.OPERATOR_OVER)
         return False
 
-    def load_frames(self):
-        # Character walk-in and pose frames
-        if os.path.exists(FRAMES_DIR):
+    def load_frames(self, character_id=None):
+        self.frames = []
+        self.config = load_config()
+        self.char_meta = get_character_metadata(character_id, self.config)
+        self.frame_interval_ms = self.char_meta.get("frame_interval_ms", 50)
+        self.loop_start = self.char_meta.get("loop_start", 0)
+
+        frames_dir = get_character_frames_dir(character_id, self.config)
+        if os.path.exists(frames_dir):
+            files = sorted([f for f in os.listdir(frames_dir) if f.startswith("f_") and f.endswith(".png")])
+            for f in files:
+                p = os.path.join(frames_dir, f)
+                try:
+                    pb = GdkPixbuf.Pixbuf.new_from_file(p)
+                    self.frames.append(pb)
+                except Exception as e:
+                    print(f"[Overlay] Failed loading frame {f}: {e}")
+
+        # Fallback to default Hydro Buddy frames if empty
+        if not self.frames and frames_dir != FRAMES_DIR and os.path.exists(FRAMES_DIR):
+            self.char_meta = get_character_metadata("default", self.config)
+            self.loop_start = 150
+            self.frame_interval_ms = 50
             files = sorted([f for f in os.listdir(FRAMES_DIR) if f.startswith("f_") and f.endswith(".png")])
             for f in files:
                 p = os.path.join(FRAMES_DIR, f)
                 try:
                     pb = GdkPixbuf.Pixbuf.new_from_file(p)
                     self.frames.append(pb)
-                except Exception as e:
-                    print(f"[Overlay] Failed loading frame {f}: {e}")
-                    
+                except Exception:
+                    pass
+
         # Smoke closing animation frames
-        if os.path.exists(SMOKE_DIR):
+        if not self.smoke_frames and os.path.exists(SMOKE_DIR):
             smoke_files = sorted([f for f in os.listdir(SMOKE_DIR) if f.startswith("close_anim_") and f.endswith(".png")])
             for f in smoke_files:
                 p = os.path.join(SMOKE_DIR, f)
@@ -313,6 +345,18 @@ class WaterReminderOverlay(Gtk.Window):
                     self.smoke_frames.append(pb)
                 except Exception as e:
                     print(f"[Overlay] Failed loading smoke frame {f}: {e}")
+
+        if hasattr(self, "image_widget") and self.frames:
+            self.image_widget.set_from_pixbuf(self.frames[0])
+
+    def reload_character(self, character_id=None):
+        self.load_frames(character_id)
+        self.current_frame_idx = 0
+        if self.frames and hasattr(self, "image_widget"):
+            self.image_widget.set_from_pixbuf(self.frames[0])
+        if self.anim_timer_id:
+            GLib.source_remove(self.anim_timer_id)
+            self.anim_timer_id = GLib.timeout_add(self.frame_interval_ms, self.on_anim_tick)
 
     def build_ui(self):
         main_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -588,6 +632,41 @@ class WaterReminderOverlay(Gtk.Window):
         audio_act_row.pack_start(self.btn_sound_toggle, False, False, 0)
         box.pack_start(audio_act_row, False, False, 1)
 
+        # Character Animation Section
+        lbl_char = Gtk.Label(label="👤 Animated Character:")
+        lbl_char.set_xalign(0)
+        lbl_char.get_style_context().add_class("subtitle-label")
+        box.pack_start(lbl_char, False, False, 0)
+        
+        char_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.combo_character = Gtk.ComboBoxText()
+        self.combo_character.get_style_context().add_class("combo-audio")
+        self.populate_character_options()
+        self.combo_character.connect("changed", self.on_character_combo_changed)
+        char_row.pack_start(self.combo_character, True, True, 0)
+        
+        self.btn_del_char = Gtk.Button(label="🗑️")
+        self.btn_del_char.set_tooltip_text("Delete selected custom character")
+        self.btn_del_char.get_style_context().add_class("btn-pill")
+        self.btn_del_char.connect("clicked", self.on_click_delete_character)
+        char_row.pack_start(self.btn_del_char, False, False, 0)
+        box.pack_start(char_row, False, False, 1)
+        
+        char_act_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.btn_add_character = Gtk.Button(label="🎬 Upload Video Character...")
+        self.btn_add_character.get_style_context().add_class("btn-pill")
+        self.btn_add_character.connect("clicked", self.on_click_add_custom_character)
+        char_act_row.pack_start(self.btn_add_character, True, True, 0)
+        box.pack_start(char_act_row, False, False, 1)
+
+        self.lbl_char_progress = Gtk.Label(label="")
+        self.lbl_char_progress.set_xalign(0)
+        self.lbl_char_progress.set_line_wrap(True)
+        self.lbl_char_progress.set_max_width_chars(32)
+        self.lbl_char_progress.get_style_context().add_class("subtitle-label")
+        self.lbl_char_progress.set_no_show_all(True)
+        box.pack_start(self.lbl_char_progress, False, False, 0)
+
         # Row 2: Default Interval
         lbl_def = Gtk.Label(label="Default Interval:")
         lbl_def.set_xalign(0)
@@ -634,10 +713,227 @@ class WaterReminderOverlay(Gtk.Window):
 
     def open_settings_view(self):
         self.populate_sound_options()
+        self.populate_character_options()
         sound_on = self.config.get("sound_enabled", True)
         if hasattr(self, "btn_sound_toggle") and self.btn_sound_toggle:
             self.btn_sound_toggle.set_label(f"🔊 Sound: {'ON' if sound_on else 'OFF'}")
         self.stack.set_visible_child_name("settings")
+
+    def populate_character_options(self):
+        if not hasattr(self, "combo_character") or self.combo_character is None:
+            return
+        self._updating_char_combo = True
+        self.combo_character.remove_all()
+        chars = list_available_characters(self.config)
+        cur_char = get_active_character_id(self.config)
+        active_idx = 0
+        for idx, c in enumerate(chars):
+            self.combo_character.append(c["id"], c["name"])
+            if c["id"] == cur_char:
+                active_idx = idx
+        self.combo_character.set_active(active_idx)
+        self._updating_char_combo = False
+        if hasattr(self, "btn_del_char") and self.btn_del_char:
+            self.btn_del_char.set_sensitive(cur_char != "default")
+
+    def on_character_combo_changed(self, widget):
+        if getattr(self, "_updating_char_combo", False):
+            return
+        char_id = self.combo_character.get_active_id()
+        if not char_id:
+            return
+        set_active_character(char_id)
+        self.config = load_config()
+        if hasattr(self, "btn_del_char") and self.btn_del_char:
+            self.btn_del_char.set_sensitive(char_id != "default")
+        self.reload_character(char_id)
+
+    def on_click_delete_character(self, widget):
+        char_id = get_active_character_id(self.config)
+        if char_id == "default":
+            return
+        
+        dialog = Gtk.MessageDialog(
+            transient_for=self,
+            flags=0,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text="Delete Character?"
+        )
+        dialog.format_secondary_text(f"Are you sure you want to remove this custom character?")
+        response = dialog.run()
+        dialog.destroy()
+        
+        if response == Gtk.ResponseType.YES:
+            delete_custom_character(char_id)
+            self.config = load_config()
+            self.populate_character_options()
+            self.reload_character("default")
+            self.feedback_title.set_text("🗑️ Character Deleted")
+            self.feedback_sub.set_text("Switched back to Hydro Buddy.")
+            self.stack.set_visible_child_name("feedback")
+            self.schedule_auto_hide(1000)
+
+    def on_click_add_custom_character(self, widget):
+        # 1. Select Video File
+        dialog = Gtk.FileChooserDialog(
+            title="Select Custom Character Video",
+            parent=self,
+            action=Gtk.FileChooserAction.OPEN
+        )
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Select Video", Gtk.ResponseType.ACCEPT)
+        
+        filter_video = Gtk.FileFilter()
+        filter_video.set_name("Video / Animation (*.mp4, *.webm, *.mov, *.mkv, *.avi, *.gif)")
+        for pattern in ["*.mp4", "*.MP4", "*.webm", "*.WEBM", "*.mov", "*.MOV", "*.mkv", "*.avi", "*.gif"]:
+            filter_video.add_pattern(pattern)
+        dialog.add_filter(filter_video)
+        
+        filter_all = Gtk.FileFilter()
+        filter_all.set_name("All Files")
+        filter_all.add_pattern("*")
+        dialog.add_filter(filter_all)
+        
+        response = dialog.run()
+        if response != Gtk.ResponseType.ACCEPT:
+            dialog.destroy()
+            return
+            
+        video_path = dialog.get_filename()
+        dialog.destroy()
+        
+        if not video_path or not os.path.exists(video_path):
+            return
+
+        # 2. Options Dialog (Character Name, Background Mode, FPS)
+        opt_dialog = Gtk.Dialog(
+            title="Character Settings",
+            parent=self,
+            flags=Gtk.DialogFlags.MODAL
+        )
+        opt_dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        btn_convert = opt_dialog.add_button("🚀 Convert & Apply", Gtk.ResponseType.OK)
+        btn_convert.get_style_context().add_class("btn-drank")
+
+        content = opt_dialog.get_content_area()
+        content.set_spacing(8)
+        content.set_margin_top(12)
+        content.set_margin_bottom(12)
+        content.set_margin_start(14)
+        content.set_margin_end(14)
+
+        lbl_head = Gtk.Label(label="🎬 Configure Custom Character")
+        lbl_head.get_style_context().add_class("title-label")
+        lbl_head.set_xalign(0)
+        content.pack_start(lbl_head, False, False, 0)
+
+        # Name Entry
+        lbl_name = Gtk.Label(label="Character Name:")
+        lbl_name.set_xalign(0)
+        lbl_name.get_style_context().add_class("subtitle-label")
+        content.pack_start(lbl_name, False, False, 0)
+
+        base_name = os.path.splitext(os.path.basename(video_path))[0].replace("_", " ").replace("-", " ").title()
+        entry_name = Gtk.Entry()
+        entry_name.set_text(base_name)
+        content.pack_start(entry_name, False, False, 0)
+
+        # Background Removal Mode
+        lbl_bg = Gtk.Label(label="Background Removal Mode:")
+        lbl_bg.set_xalign(0)
+        lbl_bg.get_style_context().add_class("subtitle-label")
+        content.pack_start(lbl_bg, False, False, 0)
+
+        combo_bg = Gtk.ComboBoxText()
+        combo_bg.append("auto", "✨ Auto-Detect Background (Smart & Recommended)")
+        combo_bg.append("white", "⚪ White / Light Studio Background")
+        combo_bg.append("green", "🟢 Green Screen (Chroma Key)")
+        combo_bg.append("blue", "🔵 Blue Screen")
+        combo_bg.append("black", "⚫ Black / Dark Background")
+        combo_bg.append("alpha", "🎞️ Video Has Transparency (Alpha Channel)")
+        combo_bg.set_active(0)
+        content.pack_start(combo_bg, False, False, 0)
+
+        # Target FPS
+        lbl_fps = Gtk.Label(label="Animation Smoothness (FPS):")
+        lbl_fps.set_xalign(0)
+        lbl_fps.get_style_context().add_class("subtitle-label")
+        content.pack_start(lbl_fps, False, False, 0)
+
+        combo_fps = Gtk.ComboBoxText()
+        combo_fps.append("20", "20 FPS (Recommended - Smooth & Lightweight)")
+        combo_fps.append("24", "24 FPS (Cinematic 24fps)")
+        combo_fps.append("15", "15 FPS (Resource Saver)")
+        combo_fps.set_active(0)
+        content.pack_start(combo_fps, False, False, 0)
+
+        opt_dialog.show_all()
+        opt_res = opt_dialog.run()
+        
+        chosen_name = entry_name.get_text().strip() or base_name
+        chosen_bg = combo_bg.get_active_id() or "auto"
+        chosen_fps = int(combo_fps.get_active_id() or "20")
+        opt_dialog.destroy()
+
+        if opt_res != Gtk.ResponseType.OK:
+            return
+
+        # 3. Launch processing in background thread
+        if self.btn_add_character:
+            self.btn_add_character.set_sensitive(False)
+        if self.lbl_char_progress:
+            self.lbl_char_progress.show()
+            self.lbl_char_progress.set_text("⏳ Preparing video extraction...")
+
+        def worker():
+            try:
+                def on_progress(pct, msg):
+                    GLib.idle_add(self._update_char_progress, pct, msg)
+
+                meta = process_video_character(
+                    video_path=video_path,
+                    character_name=chosen_name,
+                    bg_mode=chosen_bg,
+                    target_fps=chosen_fps,
+                    progress_callback=on_progress
+                )
+                GLib.idle_add(self._on_char_import_done, meta)
+            except Exception as err:
+                GLib.idle_add(self._on_char_import_error, str(err))
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+    def _update_char_progress(self, pct, msg):
+        if hasattr(self, "lbl_char_progress") and self.lbl_char_progress:
+            self.lbl_char_progress.set_text(f"⏳ {pct}%: {msg}")
+        return False
+
+    def _on_char_import_done(self, meta):
+        if hasattr(self, "btn_add_character") and self.btn_add_character:
+            self.btn_add_character.set_sensitive(True)
+        set_active_character(meta["id"])
+        self.config = load_config()
+        self.populate_character_options()
+        self.reload_character(meta["id"])
+
+        if hasattr(self, "lbl_char_progress") and self.lbl_char_progress:
+            self.lbl_char_progress.set_text(f"🎉 Ready! {meta['name']} ({meta['frame_count']} frames)")
+            GLib.timeout_add(4000, lambda: self.lbl_char_progress.set_text("") or self.lbl_char_progress.hide())
+            
+        self.feedback_title.set_text("🎉 Character Ready!")
+        self.feedback_sub.set_text(f"Active: {meta['name']}")
+        self.stack.set_visible_child_name("feedback")
+        self.schedule_auto_hide(1200)
+        return False
+
+    def _on_char_import_error(self, err_msg):
+        if hasattr(self, "btn_add_character") and self.btn_add_character:
+            self.btn_add_character.set_sensitive(True)
+        if hasattr(self, "lbl_char_progress") and self.lbl_char_progress:
+            self.lbl_char_progress.set_text(f"❌ Error: {err_msg[:60]}")
+        return False
 
     def populate_sound_options(self):
         if not hasattr(self, "combo_audio") or self.combo_audio is None:
@@ -895,7 +1191,8 @@ class WaterReminderOverlay(Gtk.Window):
         
         if self.anim_timer_id:
             GLib.source_remove(self.anim_timer_id)
-        self.anim_timer_id = GLib.timeout_add(50, self.on_anim_tick)
+        interval = getattr(self, "frame_interval_ms", 50)
+        self.anim_timer_id = GLib.timeout_add(interval, self.on_anim_tick)
 
     def on_anim_tick(self):
         if not self.frames or self.is_closing:
@@ -904,9 +1201,11 @@ class WaterReminderOverlay(Gtk.Window):
         total_frames = len(self.frames)
         self.current_frame_idx += 1
         
-        # Loop smile and raised bottle pose
+        # Smooth looping (respects character loop_start)
         if self.current_frame_idx >= total_frames:
-            loop_start = min(150, total_frames - 20)
+            loop_start = getattr(self, "loop_start", 0)
+            if loop_start >= total_frames:
+                loop_start = 0
             self.current_frame_idx = loop_start
             
         self.image_widget.set_from_pixbuf(self.frames[self.current_frame_idx])

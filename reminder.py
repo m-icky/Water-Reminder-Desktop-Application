@@ -12,7 +12,8 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from config import (
-    PID_FILE, SOCKET_FILE, PORT_FILE, LOCK_FILE, load_config, save_config, reset_glasses_count, get_today_str
+    PID_FILE, SOCKET_FILE, PORT_FILE, LOCK_FILE, load_config, save_config, reset_glasses_count, get_today_str,
+    list_available_characters, get_character_metadata, set_active_character, delete_custom_character
 )
 
 # Force X11 backend on Linux so overlay can freely position and stay on top
@@ -164,6 +165,8 @@ def cmd_status():
         print(f"  ● Interval:       Configured to {cfg.get('interval_minutes', 60)} minutes")
         print(f"  ● Sound Effects:  {'Enabled 🔊' if cfg.get('sound_enabled', True) else 'Disabled 🔇'}")
         
+    char_meta = get_character_metadata(config=cfg)
+    print(f"  ● Character:      {char_meta.get('name', 'Hydro Buddy')} ({char_meta.get('frame_count', 202)} frames)")
     history = cfg.get("daily_history", {})
     if history:
         recent = sorted(history.items(), reverse=True)[:3]
@@ -386,6 +389,118 @@ Categories=Utility;
         else:
             print("Usage: autostart [enable|disable]")
 
+def cmd_character(args):
+    if not args:
+        print("""🎬 Character Management Commands:
+  character list                               List all available characters
+  character set <id_or_name>                   Switch active character
+  character add <video_path> [--name "Name"]   Import video & convert to transparent animation
+  character delete <id>                        Delete a custom character
+""")
+        return
+
+    subcmd = args[0].lower()
+    if subcmd == "list":
+        cfg = load_config()
+        active_id = cfg.get("active_character", "default")
+        chars = list_available_characters(cfg)
+        print("🎭 Available Reminder Characters:")
+        for c in chars:
+            is_active = (c["id"] == active_id)
+            status_tag = " ⭐ [ACTIVE]" if is_active else ""
+            default_tag = " (Built-in)" if c.get("is_default") else " (Custom)"
+            print(f"  • {c['name']} (ID: {c['id']}){default_tag} - {c.get('frame_count', 0)} frames @ {c.get('fps', 20)}fps{status_tag}")
+    elif subcmd == "set":
+        if len(args) < 2:
+            print("Usage: python reminder.py character set <character_id_or_name>")
+            return
+        target = args[1].strip()
+        chars = list_available_characters()
+        matched = None
+        for c in chars:
+            if c["id"].lower() == target.lower() or c["name"].lower() == target.lower() or target.lower() in c["name"].lower():
+                matched = c
+                break
+        if not matched:
+            print(f"❌ Character '{target}' not found. Run 'python reminder.py character list' to see available characters.")
+            return
+
+        set_active_character(matched["id"])
+        pid = get_running_pid()
+        if pid:
+            send_socket_command(f"set_character {matched['id']}")
+        print(f"✅ Active character switched to: {matched['name']} (ID: {matched['id']})")
+    elif subcmd == "delete":
+        if len(args) < 2:
+            print("Usage: python reminder.py character delete <character_id>")
+            return
+        char_id = args[1].strip()
+        if char_id == "default":
+            print("❌ Cannot delete default Hydro Buddy character.")
+            return
+        success = delete_custom_character(char_id)
+        if success:
+            pid = get_running_pid()
+            if pid:
+                send_socket_command("set_character default")
+            print(f"✅ Character '{char_id}' successfully removed.")
+        else:
+            print(f"❌ Character '{char_id}' not found.")
+    elif subcmd == "add":
+        if len(args) < 2:
+            print("Usage: python reminder.py character add <video_path> [--name \"Name\"] [--mode auto|white|green|blue|black|alpha] [--fps 20]")
+            return
+        video_path = args[1]
+        if not os.path.exists(video_path):
+            print(f"❌ Video file not found: {video_path}")
+            return
+
+        name = os.path.splitext(os.path.basename(video_path))[0].replace("_", " ").title()
+        bg_mode = "auto"
+        fps = 20
+
+        i = 2
+        while i < len(args):
+            if args[i] == "--name" and i + 1 < len(args):
+                name = args[i + 1]
+                i += 2
+            elif args[i] == "--mode" and i + 1 < len(args):
+                bg_mode = args[i + 1].lower()
+                i += 2
+            elif args[i] == "--fps" and i + 1 < len(args):
+                fps = int(args[i + 1])
+                i += 2
+            else:
+                i += 1
+
+        print(f"🎬 Processing video character '{name}'...")
+        print(f"   • Source video: {video_path}")
+        print(f"   • Background removal mode: {bg_mode}")
+        print(f"   • Target FPS: {fps}")
+
+        from video_processor import process_video_character
+        def on_prog(pct, msg):
+            print(f"   [{pct}%] {msg}")
+
+        try:
+            meta = process_video_character(
+                video_path=video_path,
+                character_name=name,
+                bg_mode=bg_mode,
+                target_fps=fps,
+                progress_callback=on_prog
+            )
+            set_active_character(meta["id"])
+            pid = get_running_pid()
+            if pid:
+                send_socket_command(f"set_character {meta['id']}")
+            print(f"\n🎉 SUCCESS! Custom character '{name}' created with {meta['frame_count']} smooth frames.")
+            print(f"   • Character ID: {meta['id']}")
+            print(f"   • Active Character: {name}")
+            print(f"   Run 'python reminder.py test' to preview your new character on screen!")
+        except Exception as e:
+            print(f"❌ Video processing failed: {e}")
+
 def print_help():
     launcher = "reminder.bat" if IS_WINDOWS else "./reminder.sh"
     print(f"""💧 WATER REMINDER CLI (Cross-Platform) 💧
@@ -394,16 +509,20 @@ Usage: python reminder.py <command> [options]
    or: {launcher} <command> [options]
 
 Commands:
-  start                Start the reminder daemon in background
-  stop                 Fully stop the reminder daemon
-  restart              Restart the reminder daemon
-  status               Check status, schedule, and today's water glasses
-  test                 Immediately show the character reminder on screen
-  interval <minutes>   Set reminder interval (e.g. 60 for 1 hour, 30 for 30 min)
-  reset-count          Reset today's water glasses count back to 0
-  autostart enable     Automatically start when you power on/log in
-  autostart disable    Remove automatic startup
-  help                 Show this help message
+  start                         Start the reminder daemon in background
+  stop                          Fully stop the reminder daemon
+  restart                       Restart the reminder daemon
+  status                        Check status, schedule, active character, and glasses
+  test                          Immediately show the character reminder on screen
+  interval <minutes>            Set reminder interval (e.g. 60 for 1 hour, 30 for 30 min)
+  reset-count                   Reset today's water glasses count back to 0
+  character list                List all available characters
+  character set <id>            Switch active character
+  character add <video> [opts]  Upload & convert video to smooth transparent animation
+  character delete <id>         Delete custom character
+  autostart enable              Automatically start when you power on/log in
+  autostart disable             Remove automatic startup
+  help                          Show this help message
 """)
 
 def cmd_reset_count():
@@ -432,6 +551,8 @@ def main():
         cmd_test()
     elif cmd in ("reset-count", "reset_count", "reset"):
         cmd_reset_count()
+    elif cmd in ("character", "char", "characters"):
+        cmd_character(sys.argv[2:])
     elif cmd == "interval":
         if len(sys.argv) > 2:
             cmd_interval(sys.argv[2])

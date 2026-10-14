@@ -198,6 +198,8 @@ class ReminderDaemon:
                 now = int(time.time())
                 next_rem = cfg.get("next_reminder_time", 0)
                 rem_in = max(0, next_rem - now)
+                from config import get_character_metadata
+                char_meta = get_character_metadata(config=cfg)
                 response = {
                     "status": "running",
                     "pid": os.getpid(),
@@ -205,6 +207,8 @@ class ReminderDaemon:
                     "interval_minutes": cfg.get("interval_minutes", 60),
                     "sound_enabled": cfg.get("sound_enabled", True),
                     "glasses_today": cfg.get("glasses_today", 0),
+                    "active_character": char_meta.get("id", "default"),
+                    "active_character_name": char_meta.get("name", "Hydro Buddy"),
                     "next_reminder_in_seconds": rem_in,
                     "next_reminder_in_minutes": round(rem_in / 60, 1),
                     "is_screen_locked": self.is_screen_locked()
@@ -219,6 +223,18 @@ class ReminderDaemon:
                     response["message"] = f"Interval updated to {mins} mins"
                 except Exception as e:
                     response = {"status": "error", "message": str(e)}
+            elif data.startswith("set_character ") or data.startswith("set_char "):
+                try:
+                    char_id = data.split(maxsplit=1)[1].strip()
+                    from config import set_active_character
+                    set_active_character(char_id)
+                    self.schedule_ui_callback(lambda: self.overlay.reload_character(char_id))
+                    response["message"] = f"Character set to {char_id}"
+                except Exception as e:
+                    response = {"status": "error", "message": str(e)}
+            elif data in ("reload_character", "reload_char"):
+                self.schedule_ui_callback(lambda: self.overlay.reload_character())
+                response["message"] = "Character reloaded"
             elif data in ("reset_count", "reset"):
                 reset_glasses_count()
                 response["message"] = "Daily water count reset to 0"
