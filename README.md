@@ -39,7 +39,7 @@ The application detects your operating system automatically and uses the native 
 | **Audio Playback** | Native PulseAudio / PipeWire / ALSA (`paplay` / `pw-play` / `aplay`) | Native Windows Multimedia API (`winsound.PlaySound`) |
 | **Lock Screen Detection** | DBus (`org.gnome.ScreenSaver` / `org.freedesktop.ScreenSaver`) | Windows Win32 API (`OpenInputDesktop`) |
 | **Silent Background Daemon** | Background POSIX process group via `./reminder.sh` | Detached `pythonw.exe` process (no command prompt window) |
-| **Autostart Mechanism** | XDG Autostart (`~/.config/autostart`) & Systemd User Service | Startup folder script (`%APPDATA%\...\Startup\WaterReminder.vbs`) |
+| **Autostart Mechanism** | XDG Autostart (`~/.config/autostart`) & Systemd User Service | Startup folder script (`WaterReminder.vbs`) & Windows Registry (`HKCU\...\Run`) |
 | **IPC Communication** | Localhost TCP Socket (`127.0.0.1:<port>`) + Unix domain socket | Localhost TCP Socket (`127.0.0.1:<port>`) |
 
 ---
@@ -260,9 +260,11 @@ reminder.bat autostart enable
 ```
 
 **How it works**:
-- It creates a silent launcher script `WaterReminder.vbs` inside your personal Windows Startup folder:
+- **Startup Folder Script**: Creates a silent launcher script `WaterReminder.vbs` inside your personal Windows Startup folder:
   `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\WaterReminder.vbs`
-- When you log into Windows, Windows Script Host silently executes `pythonw.exe reminder.py daemon` without flashing any console window.
+- **Windows Registry (`Run` Key)**: Registers into `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` as a modern, reliable mechanism (unaffected by Windows 11 VBScript restrictions).
+- **Absolute Python Path & Working Directory**: Automatically embeds the full path to `pythonw.exe` (or your active virtual environment) and sets the working directory to the application folder, ensuring reliable startup even if Python was installed without the "Add to PATH" option.
+- **Silent & Windowless**: Launches completely in the background via `pythonw.exe` without flashing any command prompt or console window.
 
 To disable Windows startup:
 ```cmd
@@ -336,6 +338,18 @@ reminder.bat status
     ```cmd
     notepad reminder.log
     ```
+- **Auto-Start Not Showing Character Immediately After Boot**:
+  - By default, the application features a **30-minute startup delay** (`startup_delay_minutes: 30`) after computer turn-on to avoid interrupting your initial boot/login workflow.
+  - Check whether the daemon is already running silently in the background:
+    ```cmd
+    reminder.bat status
+    ```
+  - If you prefer alerts to start immediately without any boot delay:
+    ```cmd
+    reminder.bat startup-delay 0
+    ```
+- **GUI Overlay Fails to Appear on Windows**:
+  - Make sure **PyQt6** is installed: `pip install PyQt6 Pillow numpy`. Windows requires PyQt6 to render the frameless transparent overlay. Check `reminder.log` for any errors.
 
 ---
 
