@@ -29,13 +29,53 @@ AUTOSTART_DESKTOP_FILE = os.path.join(AUTOSTART_DIR, "water-reminder.desktop")
 SYSTEMD_USER_DIR = os.path.expanduser("~/.config/systemd/user")
 SYSTEMD_SERVICE_FILE = os.path.join(SYSTEMD_USER_DIR, "water-reminder.service")
 
-# Windows autostart path
+# Windows autostart path & registry helpers
 def get_windows_startup_vbs():
     appdata = os.environ.get("APPDATA", "")
     if not appdata:
         appdata = os.path.expanduser("~\\AppData\\Roaming")
     startup_dir = os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
     return os.path.join(startup_dir, "WaterReminder.vbs")
+
+def set_windows_registry_autostart(enable=True, py_exe=None, script_path=None):
+    if not IS_WINDOWS:
+        return False
+    try:
+        import winreg
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE | winreg.KEY_READ)
+        app_name = "WaterReminder"
+        if enable:
+            cmd = f'"{py_exe}" "{script_path}" daemon'
+            winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, cmd)
+        else:
+            try:
+                winreg.DeleteValue(key, app_name)
+            except FileNotFoundError:
+                pass
+        winreg.CloseKey(key)
+        return True
+    except Exception:
+        return False
+
+def is_windows_autostart_active():
+    if os.path.exists(get_windows_startup_vbs()):
+        return True
+    if IS_WINDOWS:
+        try:
+            import winreg
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ)
+            try:
+                winreg.QueryValueEx(key, "WaterReminder")
+                winreg.CloseKey(key)
+                return True
+            except FileNotFoundError:
+                winreg.CloseKey(key)
+        except Exception:
+            pass
+    return False
+
 
 def send_socket_command(cmd, timeout=3.0):
     # 1. Try Localhost TCP socket first (preferred cross-platform)
@@ -183,7 +223,7 @@ def cmd_status():
         print(f"  ● Past Days:      {history_str}")
         
     if IS_WINDOWS:
-        autostart_active = os.path.exists(get_windows_startup_vbs())
+        autostart_active = is_windows_autostart_active()
     else:
         autostart_active = os.path.exists(AUTOSTART_DESKTOP_FILE) or os.path.exists(SYSTEMD_SERVICE_FILE)
     print(f"  ● Auto-start:     {'Enabled (Starts on boot/login) ✅' if autostart_active else 'Disabled ❌'}")
@@ -210,6 +250,7 @@ def cmd_start():
                 [py_exe, os.path.join(BASE_DIR, "reminder.py"), "daemon"],
                 stdout=log,
                 stderr=log,
+                cwd=BASE_DIR,
                 creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
                 close_fds=True
             )
@@ -343,24 +384,31 @@ def cmd_startup_delay(mins):
 def cmd_autostart(action):
     if IS_WINDOWS:
         vbs_file = get_windows_startup_vbs()
+        script_path = os.path.join(BASE_DIR, "reminder.py")
+        py_dir = os.path.dirname(sys.executable)
+        pythonw = os.path.join(py_dir, "pythonw.exe")
+        py_exe = pythonw if os.path.exists(pythonw) else sys.executable
+
         if action == "enable":
             os.makedirs(os.path.dirname(vbs_file), exist_ok=True)
-            script_path = os.path.join(BASE_DIR, "reminder.py").replace("\\", "\\\\")
-            py_dir = os.path.dirname(sys.executable)
-            pythonw = os.path.join(py_dir, "pythonw.exe")
-            py_exe = "pythonw.exe" if os.path.exists(pythonw) else "python.exe"
-            
             vbs_content = f'''Set WshShell = CreateObject("WScript.Shell")
-WshShell.Run "{py_exe} \"\"\"{script_path}\"\"\" daemon", 0, False
+WshShell.CurrentDirectory = "{BASE_DIR}"
+WshShell.Run chr(34) & "{py_exe}" & chr(34) & " " & chr(34) & "{script_path}" & chr(34) & " daemon", 0, False
 '''
             with open(vbs_file, "w") as f:
                 f.write(vbs_content)
+
+            reg_ok = set_windows_registry_autostart(True, py_exe, script_path)
+
             print("✅ Windows Auto-start ENABLED!")
             print(f"   • Created Startup launcher: {vbs_file}")
+            if reg_ok:
+                print("   • Registered Windows Registry: HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run")
             print("   The script will start silently in background when you log into Windows!")
         elif action == "disable":
             if os.path.exists(vbs_file):
                 os.unlink(vbs_file)
+            set_windows_registry_autostart(False)
             print("✅ Windows Auto-start DISABLED.")
         else:
             print("Usage: autostart [enable|disable]")
